@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>前田学校</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.92em' font-size='90'%3E🏫%3C/text%3E%3C/svg%3E">
+<link rel="apple-touch-icon" href="assets/icon-180.png">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#2f4b9e">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="前田学校">
+<link rel="stylesheet" href="assets/school.css">
+<script>
+/* テーマのちらつき防止。描画前に保存済みの設定を当てる */
+(function () {
+  try {
+    var t = localStorage.getItem('maeda-school-theme');
+    if (t === 'light' || t === 'dark') {
+      document.documentElement.setAttribute('data-theme', t);
+      document.documentElement.style.colorScheme = t;
+    }
+  } catch (e) {}
+})();
+</script>
+</head>
+<body>
+<a class="skip" href="#main">本文へ移動</a>
+
+<header class="topbar">
+  <a class="brand" href="index.html">
+    <span class="brand__name">前田学校</span>
+    <span class="brand__sub mono">YOUTUBE → BOARD NOTES</span>
+  </a>
+  <nav class="topnav">
+    <a href="index.html" aria-current="page">正門</a>
+    <a href="職員室.html">職員室</a>
+    <button type="button" class="themebtn" id="themebtn">◐</button>
+  </nav>
+</header>
+
+<main class="page" id="main">
+
+  <!-- 本日の講義 -->
+  <section class="today" id="today"></section>
+
+  <!-- 台帳（学校の状況） -->
+  <dl class="ledger" id="ledger"></dl>
+
+  <div class="split" id="split">
+    <!-- 絞り込み -->
+    <aside class="rail">
+      <div class="rail__block">
+        <div class="search">
+          <span class="search__icon">🔍</span>
+          <input type="search" id="q" placeholder="講義を探す" aria-label="講義をフリーワードで検索" autocomplete="off">
+          <span class="search__key">/</span>
+        </div>
+      </div>
+
+      <details id="filters">
+        <summary>絞り込み<span class="badge-n" id="filtern" hidden>0</span></summary>
+
+        <div class="rail__block">
+          <p class="rail__title">TEACHERS<button type="button" class="clear" id="clearteacher" hidden>解除</button></p>
+          <div class="roster" id="roster"></div>
+        </div>
+
+        <div class="rail__block">
+          <p class="rail__title">TAGS<button type="button" class="clear" id="cleartag" hidden>解除</button></p>
+          <div class="tagcloud" id="tagcloud"></div>
+        </div>
+      </details>
+    </aside>
+
+    <!-- 講義一覧 -->
+    <section class="feed">
+      <div class="sec-head">
+        <h2>新着の講義</h2>
+        <span class="count" id="count"></span>
+      </div>
+      <div id="activefilter"></div>
+      <div class="feed__list" id="list"></div>
+      <div class="more" id="more"></div>
+    </section>
+  </div>
+
+  <!-- 講義が1件も無いとき -->
+  <div id="blank" hidden></div>
+
+</main>
+
+<script src="../データ/teachers.js"></script>
+<script src="../データ/lectures.js"></script>
+<script src="assets/school.js"></script>
+<script>
+/* ===========================================================
+   正門（トップ）
+   =========================================================== */
+(function () {
+  'use strict';
+  var S = window.School, el = S.el, doc = document;
+  function $(id) { return doc.getElementById(id); }
+
+  S.mountTheme($('themebtn'));
+
+  var PAGE = 24;
+  var all = S.views;
+  var state = { q: S.qs('q'), teacher: S.qs('teacher'), tag: S.qs('tag') };
+  var results = [], shown = PAGE, drawn = 0, firstPaint = true;
+
+  /* ---------- 講義が0件のとき ---------- */
+  if (!all.length) {
+    $('split').hidden = true;
+    $('ledger').hidden = true;
+    var b = $('blank');
+    b.hidden = false;
+    b.className = 'blank';
+    b.appendChild(el('div', 'blank__mark', '🏫'));
+    b.appendChild(el('h2', null, 'まだ講義がありません'));
+    b.appendChild(el('p', null, 'YouTubeのURLを渡すと、担当の先生が板書にまとめてここに並べます。'));
+    b.appendChild(el('code', null, 'ツール/受講.sh <YouTubeのURL>'));
+    var go = doc.createElement('a');
+    go.className = 'btn'; go.href = '職員室.html';
+    go.textContent = '職員室で先生を見る →';
+    b.appendChild(go);
+    renderToday([]);
+    return;
+  }
+
+  /* ---------- 本日の講義 ---------- */
+  function marquee(v) {
+    var a = doc.createElement('a');
+    a.className = 'marquee is-enter';
+    a.href = '教室.html?id=' + encodeURIComponent(v.lec.id);
+    S.applyTint(a, v.teacher.color);
+    a.appendChild(el('span', 'marquee__spine'));
+
+    var inner = el('span', 'marquee__inner');
+    var main = el('span', 'marquee__main');
+
+    var by = el('span', 'marquee__by');
+    by.appendChild(S.teacherChip(v.teacher));
+    by.appendChild(S.periodTag(v));
+    if (v.lec.demo) by.appendChild(el('span', 'badge-demo', 'サンプル'));
+    main.appendChild(by);
+
+    main.appendChild(el('span', 'marquee__title', v.lec.title || '（無題の講義）'));
+    if (v.lec.summary) main.appendChild(el('span', 'marquee__summary', v.lec.summary));
+    main.appendChild(el('span', 'marquee__go', '教室へ入る →'));
+
+    inner.appendChild(main);
+    // 元動画が無い講義でここに大きなプレースホルダを敷いても情報がない。
+    // サムネが実在するときだけ出す（一覧カードは行の拍を揃えたいので常に出す）。
+    if (v.video && v.video.id) inner.appendChild(S.thumbBox(v, 'marquee__thumb'));
+    a.appendChild(inner);
+    return a;
+  }
+
+  function renderToday(todays) {
+    var box = $('today');
+    box.textContent = '';
+
+    var head = el('div', 'today__date');
+    head.appendChild(el('span', 'label mono', todays.length ? '本日の講義' : '本日'));
+    head.appendChild(el('span', 'd mono', S.fmtLong(S.todayISO())));
+    box.appendChild(head);
+
+    if (todays.length) {
+      box.appendChild(marquee(todays[0]));
+      if (todays.length > 1) {
+        var also = el('p', 'today__also');
+        also.appendChild(doc.createTextNode('本日はほかに ' + (todays.length - 1) + '件 '));
+        for (var i = 1; i < todays.length; i++) {
+          if (i > 1) also.appendChild(el('span', 'sep', '/'));
+          var a = doc.createElement('a');
+          a.href = '教室.html?id=' + encodeURIComponent(todays[i].lec.id);
+          a.textContent = todays[i].period + '限「' + (todays[i].lec.title || '無題') + '」';
+          also.appendChild(a);
+        }
+        box.appendChild(also);
+      }
+      return;
+    }
+
+    // 休講
+    var c = el('div', 'closed');
+    c.appendChild(el('h2', null, '本日は休講'));
+    c.appendChild(el('p', null, 'YouTubeのURLを渡すと、担当の先生が板書にまとめます。'));
+    if (all.length) {
+      var last = el('p', 'last');
+      last.appendChild(el('span', 'mono', '最後の講義  ' + S.fmtMD(all[0].lec.date) + '  '));
+      var la = doc.createElement('a');
+      la.href = '教室.html?id=' + encodeURIComponent(all[0].lec.id);
+      la.textContent = all[0].teacher.name + '「' + (all[0].lec.title || '無題') + '」';
+      last.appendChild(la);
+      c.appendChild(last);
+    }
+    box.appendChild(c);
+  }
+
+  /* ---------- 台帳 ---------- */
+  function renderLedger() {
+    var s = S.stats(), dl = $('ledger');
+    dl.textContent = '';
+    function row(label, value, unit) {
+      var d = doc.createElement('div');
+      d.appendChild(el('dt', null, label));
+      var dd = el('dd', null, value);
+      if (unit) dd.appendChild(el('small', null, unit));
+      d.appendChild(dd);
+      dl.appendChild(d);
+    }
+    row('講義', String(s.lectures), '件');
+    row('先生', String(s.teachers), '名');
+    row('今月', String(s.thisMonth), '件');
+    row('最終受講', s.last ? S.fmtMD(s.last) : '—', '');
+  }
+
+  /* ---------- 絞り込み（先生・タグ） ---------- */
+  var counts = S.countByTeacher();
+
+  function rosterButton(t, n, active, onClick) {
+    var b = doc.createElement('button');
+    b.type = 'button';
+    b.className = 'roster__item' + (n === 0 ? ' is-zero' : '') + (t ? '' : ' roster__all');
+    b.setAttribute('aria-pressed', active ? 'true' : 'false');
+    if (t) S.applyTint(b, t.color);
+    b.appendChild(el('span', 'roster__bar'));
+    b.appendChild(el('span', 'roster__emoji', t ? (t.emoji || '📄') : '⌂'));
+    b.appendChild(el('span', 'roster__name', t ? t.name : '全員'));
+    b.appendChild(el('span', 'roster__n', String(n)));
+    b.addEventListener('click', onClick);
+    return b;
+  }
+
+  function renderRoster() {
+    var box = $('roster');
+    box.textContent = '';
+    box.appendChild(rosterButton(null, all.length, !state.teacher, function () {
+      state.teacher = ''; update();
+    }));
+    for (var i = 0; i < S.teachers.length; i++) {
+      (function (t) {
+        var active = state.teacher === t.id;
+        box.appendChild(rosterButton(t, counts[t.id] || 0, active, function () {
+          state.teacher = active ? '' : t.id; update();
+        }));
+      })(S.teachers[i]);
+    }
+    $('clearteacher').hidden = !state.teacher;
+  }
+
+  function renderTags() {
+    var box = $('tagcloud'), list = S.tagRanking(24);
+    box.textContent = '';
+    for (var i = 0; i < list.length; i++) {
+      (function (item) {
+        var active = state.tag === item.tag;
+        var b = doc.createElement('button');
+        b.type = 'button';
+        b.className = 'tagbtn';
+        b.setAttribute('aria-pressed', active ? 'true' : 'false');
+        b.appendChild(doc.createTextNode(item.tag));
+        b.appendChild(el('span', 'n', String(item.n)));
+        b.addEventListener('click', function () { state.tag = active ? '' : item.tag; update(); });
+        box.appendChild(b);
+      })(list[i]);
+    }
+    $('cleartag').hidden = !state.tag;
+  }
+
+  /* ---------- 絞り込み中の帯 ---------- */
+  function renderActive() {
+    var box = $('activefilter');
+    box.textContent = '';
+    if (!state.teacher && !state.tag) return;
+
+    var bar = el('div', 'activefilter');
+    if (state.teacher) {
+      var t = S.teacherById(state.teacher);
+      S.applyTint(bar, t.color);
+      bar.appendChild(S.teacherChip(t));
+      bar.appendChild(el('span', null, 'の講義'));
+    }
+    if (state.tag) {
+      bar.appendChild(el('span', 'mono', '#' + state.tag));
+    }
+    var x = doc.createElement('button');
+    x.type = 'button'; x.className = 'x'; x.textContent = '絞り込みを解除';
+    x.addEventListener('click', function () { state.teacher = ''; state.tag = ''; update(); });
+    bar.appendChild(x);
+    box.appendChild(bar);
+  }
+
+  /* ---------- 一覧 ---------- */
+  function renderList(reset) {
+    var list = $('list');
+    if (reset) { list.textContent = ''; drawn = 0; }
+
+    if (!results.length) {
+      list.className = 'feed__list';
+      var b = el('div', 'blank');
+      b.appendChild(el('div', 'blank__mark', '🔍'));
+      b.appendChild(el('h2', null, '条件に合う講義がありません'));
+      b.appendChild(el('p', null, '言葉を短くするか、絞り込みを外してみてください。'));
+      var btn = doc.createElement('button');
+      btn.type = 'button'; btn.className = 'btn';
+      btn.textContent = '条件をすべて解除';
+      btn.addEventListener('click', function () {
+        state.q = ''; state.teacher = ''; state.tag = '';
+        $('q').value = ''; update();
+      });
+      b.appendChild(btn);
+      list.appendChild(b);
+      $('more').textContent = '';
+      return;
+    }
+
+    list.className = 'feed__list' + (firstPaint ? ' is-enter' : '');
+    var frag = doc.createDocumentFragment();
+    var end = Math.min(shown, results.length);
+    for (var i = drawn; i < end; i++) {
+      var card = S.lectureCard(results[i]);
+      if (firstPaint) card.style.setProperty('--i', String(Math.min(i, 12)));
+      frag.appendChild(card);
+    }
+    list.appendChild(frag);
+    drawn = end;
+
+    // もっと見る
+    var more = $('more');
+    more.textContent = '';
+    if (results.length > drawn) {
+      var mb = doc.createElement('button');
+      mb.type = 'button'; mb.className = 'btn';
+      mb.textContent = 'もっと見る（残り ' + (results.length - drawn) + '件）';
+      mb.addEventListener('click', function () { shown += PAGE; firstPaint = false; renderList(false); });
+      more.appendChild(mb);
+    }
+  }
+
+  /* ---------- まとめて更新 ---------- */
+  function update() {
+    results = S.search(all, state);
+    shown = PAGE;
+    renderRoster();
+    renderTags();
+    renderActive();
+    renderList(true);
+
+    var n = (state.teacher ? 1 : 0) + (state.tag ? 1 : 0);
+    var badge = $('filtern');
+    badge.hidden = n === 0;
+    badge.textContent = String(n);
+
+    $('count').textContent = (results.length === all.length)
+      ? all.length + '件'
+      : '該当 ' + results.length + '件 / 全' + all.length + '件';
+
+    S.syncUrl(state);
+    firstPaint = false;
+  }
+
+  /* ---------- 検索 ---------- */
+  var input = $('q');
+  input.value = state.q;
+  var timer = null;
+  input.addEventListener('input', function () {
+    clearTimeout(timer);
+    timer = setTimeout(function () { state.q = input.value; update(); }, 120);
+  });
+  input.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && input.value) {
+      input.value = ''; state.q = ''; update();
+    }
+  });
+  doc.addEventListener('keydown', function (e) {
+    if (e.key === '/' && doc.activeElement !== input) {
+      e.preventDefault(); input.focus(); input.select();
+    }
+  });
+
+  $('clearteacher').addEventListener('click', function () { state.teacher = ''; update(); });
+  $('cleartag').addEventListener('click', function () { state.tag = ''; update(); });
+
+  /* ---------- 絞り込みパネルは広い画面では開いておく ---------- */
+  var details = $('filters');
+  var mq = window.matchMedia('(min-width: 1000px)');
+  function syncDetails(e) { details.open = e.matches; }
+  syncDetails(mq);
+  if (mq.addEventListener) mq.addEventListener('change', syncDetails);
+  else if (mq.addListener) mq.addListener(syncDetails);
+
+  /* ---------- スクロールで追い読み ---------- */
+  if (window.IntersectionObserver) {
+    new IntersectionObserver(function (entries) {
+      if (entries[0].isIntersecting && results.length > drawn) {
+        shown += PAGE; firstPaint = false; renderList(false);
+      }
+    }, { rootMargin: '600px 0px' }).observe($('more'));
+  }
+
+  /* ---------- 起動 ---------- */
+  var today = S.todayISO();
+  var todays = [];
+  for (var i = 0; i < all.length; i++) if (all[i].lec.date === today) todays.push(all[i]);
+  todays.sort(function (a, b) { return Number(a.period) - Number(b.period); });
+  todays.reverse(); // 直近の限を先頭に
+
+  renderToday(todays);
+  renderLedger();
+  update();
+})();
+</script>
+</body>
+</html>

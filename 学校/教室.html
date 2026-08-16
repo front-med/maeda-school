@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>教室 — 前田学校</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.92em' font-size='90'%3E🏫%3C/text%3E%3C/svg%3E">
+<link rel="apple-touch-icon" href="assets/icon-180.png">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#2f4b9e">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="前田学校">
+<link rel="stylesheet" href="assets/school.css">
+<script>
+(function () {
+  try {
+    var t = localStorage.getItem('maeda-school-theme');
+    if (t === 'light' || t === 'dark') {
+      document.documentElement.setAttribute('data-theme', t);
+      document.documentElement.style.colorScheme = t;
+    }
+  } catch (e) {}
+})();
+</script>
+</head>
+<body>
+<a class="skip" href="#main">本文へ移動</a>
+
+<header class="topbar">
+  <a class="brand" href="index.html">
+    <span class="brand__name">前田学校</span>
+    <span class="brand__sub mono">YOUTUBE → BOARD NOTES</span>
+  </a>
+  <nav class="topnav">
+    <a href="index.html">正門</a>
+    <a href="職員室.html">職員室</a>
+    <button type="button" class="themebtn" id="themebtn">◐</button>
+  </nav>
+</header>
+
+<main class="page" id="main">
+  <article class="lecture" id="lecture"></article>
+</main>
+
+<script src="../データ/teachers.js"></script>
+<script src="../データ/lectures.js"></script>
+<script src="assets/school.js"></script>
+<script>
+/* ===========================================================
+   教室 — 講義本体（?id=<講義ID>）
+   板書は元動画の時間軸を左の罫線に見立てて縦に並べる。
+   at を持つブロックは、その罫線上の「駅」として時刻リンクになる。
+   =========================================================== */
+(function () {
+  'use strict';
+  var S = window.School, el = S.el, doc = document;
+  var root = doc.getElementById('lecture');
+
+  S.mountTheme(doc.getElementById('themebtn'));
+
+  var id = S.qs('id');
+  var v = id ? S.byId[id] : null;
+
+  /* ---------- 講義が見つからないとき ---------- */
+  if (!v) {
+    var b = el('div', 'blank');
+    b.appendChild(el('div', 'blank__mark', '🚪'));
+    b.appendChild(el('h2', null, id ? 'その講義は見つかりません' : '講義が指定されていません'));
+    b.appendChild(el('p', null, id
+      ? '「' + id + '」に当たる講義がありません。IDが違うか、データから消えています。'
+      : '正門から講義を選んでください。'));
+
+    if (S.views.length) {
+      var recent = el('div', 'recent');
+      recent.appendChild(el('p', 'recent__label mono', '最近の講義'));
+      for (var n = 0; n < Math.min(3, S.views.length); n++) {
+        var r = S.views[n];
+        var ra = doc.createElement('a');
+        ra.href = '教室.html?id=' + encodeURIComponent(r.lec.id);
+        ra.textContent = (r.teacher.emoji || '📄') + '  ' + (r.lec.title || '無題');
+        recent.appendChild(ra);
+      }
+      b.appendChild(recent);
+    }
+
+    var back = doc.createElement('a');
+    back.className = 'btn btn--primary';
+    back.href = 'index.html';
+    back.textContent = '正門へ戻る';
+    b.appendChild(back);
+    root.appendChild(b);
+    doc.title = '講義が見つかりません — 前田学校';
+    return;
+  }
+
+  /* ---------- 準備 ---------- */
+  var lec = v.lec, t = v.teacher, video = v.video || {};
+  S.applyTint(root, t.color);
+  doc.title = (lec.title || '講義') + ' — 前田学校';
+
+  /* ---------- 1. 見出し（担当教師・タイトル・受講日） ---------- */
+  var head = doc.createElement('header');
+  head.className = 'lecture__head';
+
+  var crumb = doc.createElement('a');
+  crumb.className = 'crumb';
+  crumb.href = 'index.html';
+  crumb.textContent = '← 正門';
+  head.appendChild(crumb);
+
+  var by = el('div', 'byline');
+  by.appendChild(el('div', 'byline__emoji', t.emoji || '📄'));
+  var who = doc.createElement('div');
+  if (t.id) {
+    var wl = doc.createElement('a');
+    wl.className = 'byline__name';
+    wl.href = 'index.html?teacher=' + encodeURIComponent(t.id);
+    wl.textContent = t.name;
+    who.appendChild(wl);
+  } else {
+    who.appendChild(el('div', 'byline__name', t.name));
+  }
+  who.appendChild(el('div', 'byline__sub', (t.subject || '—') + '  /  ' + (t.room || '—')));
+  by.appendChild(who);
+  head.appendChild(by);
+
+  var meta = el('p', 'lecture__meta');
+  meta.appendChild(el('span', null, v.dateLong));
+  meta.appendChild(el('span', null, v.period + '限'));
+  if (lec.demo) meta.appendChild(el('span', 'badge-demo', 'サンプル'));
+  head.appendChild(meta);
+
+  head.appendChild(el('h1', 'lecture__title', lec.title || '（無題の講義）'));
+
+  if (lec.summary) head.appendChild(el('p', 'lecture__summary', lec.summary));
+
+  /* ---------- 2. 元動画 ---------- */
+  var src = el('div', 'source');
+  if (video.url) {
+    var vl = doc.createElement('a');
+    vl.className = 'source__link';
+    vl.href = video.url;
+    vl.target = '_blank';
+    vl.rel = 'noopener noreferrer';
+    vl.textContent = '▶ 元動画を見る';
+    src.appendChild(vl);
+  } else {
+    src.appendChild(el('span', 'source__link is-none', '元動画なし'));
+  }
+
+  var sm = el('p', 'source__meta');
+  if (video.title && video.title !== '—') sm.appendChild(el('span', 'ch', video.title));
+  if (video.channel && video.channel !== '—') {
+    if (sm.childNodes.length) sm.appendChild(doc.createTextNode('  ·  '));
+    sm.appendChild(el('span', 'ch', video.channel));
+  }
+  if (video.duration && video.duration !== '—') {
+    if (sm.childNodes.length) sm.appendChild(doc.createTextNode('  ·  '));
+    sm.appendChild(doc.createTextNode(video.duration));
+  }
+  if (sm.childNodes.length) src.appendChild(sm);
+  head.appendChild(src);
+
+  /* ---------- 3. タグ ---------- */
+  if (v.tags.length) {
+    var tg = el('div', 'lecture__tags');
+    for (var i = 0; i < v.tags.length; i++) {
+      var ta = doc.createElement('a');
+      ta.href = 'index.html?tag=' + encodeURIComponent(v.tags[i]);
+      ta.textContent = '#' + v.tags[i];
+      tg.appendChild(ta);
+    }
+    head.appendChild(tg);
+  }
+  root.appendChild(head);
+
+  /* ---------- 4. 板書（ここが主役） ---------- */
+  if (v.board.length) {
+    var sec = el('section', 'lecture__sec');
+    sec.appendChild(el('h2', null, '板書'));
+
+    var ol = doc.createElement('ol');
+    ol.className = 'board';
+
+    for (var k = 0; k < v.board.length; k++) {
+      var blk = v.board[k] || {};
+      var seek = S.seekUrl(video.url, blk.at);
+
+      var li = doc.createElement('li');
+      li.className = 'blk' + (seek ? ' blk--at' : '');
+      li.appendChild(el('span', 'blk__node'));
+      li.appendChild(el('h3', 'blk__head', blk.heading || ''));
+
+      // at と video.url が揃っているときだけ時刻リンクを出す
+      if (seek) {
+        var sa = doc.createElement('a');
+        sa.className = 'blk__at';
+        sa.href = seek;
+        sa.target = '_blank';
+        sa.rel = 'noopener noreferrer';
+        sa.textContent = '▶ ' + S.mmss(blk.at) + ' から';
+        li.appendChild(sa);
+      }
+
+      var pts = Array.isArray(blk.points) ? blk.points : [];
+      if (pts.length) {
+        var ul = doc.createElement('ul');
+        ul.className = 'blk__points';
+        for (var p = 0; p < pts.length; p++) ul.appendChild(el('li', null, pts[p]));
+        li.appendChild(ul);
+      }
+      ol.appendChild(li);
+    }
+    sec.appendChild(ol);
+    root.appendChild(sec);
+  }
+
+  /* ---------- 5. 重要語 ---------- */
+  if (v.terms.length) {
+    var tsec = el('section', 'lecture__sec');
+    tsec.appendChild(el('h2', null, '重要語'));
+    var dl = doc.createElement('dl');
+    dl.className = 'terms';
+    for (var m = 0; m < v.terms.length; m++) {
+      var term = v.terms[m] || {};
+      var cell = doc.createElement('div');
+      cell.appendChild(el('dt', null, term.term || ''));
+      cell.appendChild(el('dd', null, term.definition || ''));
+      dl.appendChild(cell);
+    }
+    tsec.appendChild(dl);
+    root.appendChild(tsec);
+  }
+
+  /* ---------- 6. 今日の一手（別格） ---------- */
+  if (lec.action) {
+    var asec = el('section', 'lecture__sec');
+    var act = el('div', 'action');
+    act.appendChild(el('p', 'action__label', '今日の一手'));
+    act.appendChild(el('p', 'action__body', lec.action));
+    act.appendChild(el('p', 'action__by', t.name + '  /  ' + (t.subject || '—')));
+    asec.appendChild(act);
+    root.appendChild(asec);
+  }
+
+  /* ---------- 7. 前後の講義 ---------- */
+  var nav = doc.createElement('nav');
+  nav.className = 'pager';
+  nav.setAttribute('aria-label', '前後の講義');
+
+  function pagerCell(target, dir) {
+    if (!target) {
+      var ghost = doc.createElement('div');
+      ghost.className = 'ghost';
+      ghost.appendChild(el('span', 'dir', dir));
+      ghost.appendChild(el('span', 't', 'ここが端です'));
+      return ghost;
+    }
+    var a = doc.createElement('a');
+    a.href = '教室.html?id=' + encodeURIComponent(target.lec.id);
+    a.appendChild(el('span', 'dir', dir));
+    a.appendChild(el('span', 't', (target.teacher.emoji || '📄') + ' ' + (target.lec.title || '無題')));
+    return a;
+  }
+
+  // 配列は新しい順。index-1 が新しい講義、index+1 が古い講義。
+  nav.appendChild(pagerCell(S.views[v.index - 1] || null, '← 新しい講義'));
+  nav.appendChild(pagerCell(S.views[v.index + 1] || null, '古い講義 →'));
+  root.appendChild(nav);
+
+  var gate = el('div', 'gate');
+  var ga = doc.createElement('a');
+  ga.href = 'index.html';
+  ga.textContent = '正門へ戻る';
+  gate.appendChild(ga);
+  root.appendChild(gate);
+})();
+</script>
+</body>
+</html>

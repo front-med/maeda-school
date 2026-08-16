@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>職員室 — 前田学校</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.92em' font-size='90'%3E🏫%3C/text%3E%3C/svg%3E">
+<link rel="apple-touch-icon" href="assets/icon-180.png">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#2f4b9e">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="前田学校">
+<link rel="stylesheet" href="assets/school.css">
+<script>
+(function () {
+  try {
+    var t = localStorage.getItem('maeda-school-theme');
+    if (t === 'light' || t === 'dark') {
+      document.documentElement.setAttribute('data-theme', t);
+      document.documentElement.style.colorScheme = t;
+    }
+  } catch (e) {}
+})();
+</script>
+</head>
+<body>
+<a class="skip" href="#main">本文へ移動</a>
+
+<header class="topbar">
+  <a class="brand" href="index.html">
+    <span class="brand__name">前田学校</span>
+    <span class="brand__sub mono">YOUTUBE → BOARD NOTES</span>
+  </a>
+  <nav class="topnav">
+    <a href="index.html">正門</a>
+    <a href="職員室.html" aria-current="page">職員室</a>
+    <button type="button" class="themebtn" id="themebtn">◐</button>
+  </nav>
+</header>
+
+<main class="page" id="main">
+  <div class="today__date">
+    <span class="label mono">職員室</span>
+    <span class="d mono" id="staffcount"></span>
+  </div>
+
+  <dl class="ledger" id="ledger"></dl>
+
+  <div class="staff__grid" id="grid"></div>
+</main>
+
+<script src="../データ/teachers.js"></script>
+<script src="../データ/lectures.js"></script>
+<script src="assets/school.js"></script>
+<script>
+/* ===========================================================
+   職員室 — 先生名簿
+   =========================================================== */
+(function () {
+  'use strict';
+  var S = window.School, el = S.el, doc = document;
+  function $(id) { return doc.getElementById(id); }
+
+  S.mountTheme($('themebtn'));
+
+  var counts = S.countByTeacher();
+  var teachers = S.teachers;
+
+  /* ---------- 見出しと台帳 ---------- */
+  var newcomers = 0, i;
+  for (i = 0; i < teachers.length; i++) if (teachers[i].founding === false) newcomers++;
+
+  $('staffcount').textContent = '在籍 ' + teachers.length + '名';
+
+  (function () {
+    var dl = $('ledger');
+    function row(label, value, unit) {
+      var d = doc.createElement('div');
+      d.appendChild(el('dt', null, label));
+      var dd = el('dd', null, value);
+      if (unit) dd.appendChild(el('small', null, unit));
+      d.appendChild(dd);
+      dl.appendChild(d);
+    }
+    var subjects = {}, k = 0, s;
+    for (s = 0; s < teachers.length; s++) subjects[teachers[s].subject || '—'] = 1;
+    for (s in subjects) if (Object.prototype.hasOwnProperty.call(subjects, s)) k++;
+
+    row('教師', String(teachers.length), '名');
+    row('うち新任', String(newcomers), '名');
+    row('担当教科', String(k), '科');
+    row('講義', String(S.views.length), '件');
+  })();
+
+  /* ---------- 先生カード ---------- */
+  function card(t) {
+    var n = counts[t.id] || 0;
+
+    var art = doc.createElement('article');
+    art.className = 'tcard';
+    S.applyTint(art, t.color);
+    art.appendChild(el('span', 'tcard__spine'));
+
+    var box = el('div', 'tcard__in');
+
+    /* 顔・名前・受け持ち数 */
+    var head = el('div', 'tcard__head');
+    head.appendChild(el('div', 'tcard__emoji', t.emoji || '📄'));
+
+    var idbox = doc.createElement('div');
+    var name = el('div', 'tcard__name');
+    var link = doc.createElement('a');
+    link.href = 'index.html?teacher=' + encodeURIComponent(t.id);
+    link.textContent = t.name;
+    name.appendChild(link);
+    if (t.founding === false) name.appendChild(el('span', 'badge-new', '新任'));
+    idbox.appendChild(name);
+    idbox.appendChild(el('div', 'tcard__kana', t.kana || ''));
+    head.appendChild(idbox);
+
+    var cnt = doc.createElement('a');
+    cnt.className = 'tcard__count';
+    cnt.href = 'index.html?teacher=' + encodeURIComponent(t.id);
+    cnt.setAttribute('aria-label', t.name + 'の講義 ' + n + '件を見る');
+    cnt.appendChild(el('b', null, String(n)));
+    cnt.appendChild(el('span', null, '講義'));
+    head.appendChild(cnt);
+    box.appendChild(head);
+
+    /* 教科と教室 */
+    var sub = el('p', 'tcard__subject');
+    sub.appendChild(doc.createTextNode(t.subject || '—'));
+    sub.appendChild(el('span', 'sep', '/'));
+    sub.appendChild(el('span', 'room', t.room || '—'));
+    box.appendChild(sub);
+
+    /* 決め台詞 */
+    if (t.catchphrase) box.appendChild(el('p', 'tcard__phrase', t.catchphrase));
+
+    /* 人物 */
+    if (t.profile) box.appendChild(el('p', 'tcard__profile', t.profile));
+
+    /* 担当ジャンル（多いので折りたたむ） */
+    var tags = Array.isArray(t.tags) ? t.tags : [];
+    if (tags.length) {
+      var det = doc.createElement('details');
+      var sum = doc.createElement('summary');
+      sum.textContent = '担当ジャンル ' + tags.length;
+      det.appendChild(sum);
+      var wrap = el('div', 'genres');
+      for (var k = 0; k < tags.length; k++) wrap.appendChild(el('span', null, tags[k]));
+      det.appendChild(wrap);
+      var detWrap = el('div', 'tcard__genres');
+      detWrap.appendChild(det);
+      box.appendChild(detWrap);
+    }
+
+    /* 着任日など */
+    var foot = el('div', 'tcard__foot');
+    foot.appendChild(el('span', null, '着任 ' + (t.joined || '—')));
+    foot.appendChild(el('span', null, t.founding === false ? '新任採用' : '開校時から'));
+    if (n) {
+      var go = doc.createElement('a');
+      go.className = 'tcard__go';
+      go.href = 'index.html?teacher=' + encodeURIComponent(t.id);
+      go.textContent = '講義を見る →';
+      foot.appendChild(go);
+    } else {
+      foot.appendChild(el('span', 'tcard__go is-mute', '講義はまだありません'));
+    }
+    box.appendChild(foot);
+
+    art.appendChild(box);
+    return art;
+  }
+
+  var grid = $('grid'), frag = doc.createDocumentFragment();
+  if (!teachers.length) {
+    var b = el('div', 'blank');
+    b.appendChild(el('div', 'blank__mark', '🪑'));
+    b.appendChild(el('h2', null, '職員室に誰もいません'));
+    b.appendChild(el('p', null, 'データ/teachers.js が読み込めていない可能性があります。'));
+    grid.appendChild(b);
+  } else {
+    for (i = 0; i < teachers.length; i++) frag.appendChild(card(teachers[i]));
+    grid.appendChild(frag);
+  }
+})();
+</script>
+</body>
+</html>

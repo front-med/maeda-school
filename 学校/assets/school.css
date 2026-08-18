@@ -996,6 +996,8 @@ body {
 
 .history__list { display: grid; gap: var(--s3); }
 .history__item {
+  min-width: 0;   /* grid アイテムは既定で min-width: auto。中の要約テキストの
+                     全文幅ぶんまでグリッド全体を押し広げてしまうのを防ぐ */
   border: 1px solid var(--line); border-radius: var(--r-md);
   background: var(--surface);
 }
@@ -1012,10 +1014,11 @@ body {
 .history__item[open] summary::before { transform: rotate(90deg); }
 .history__when { flex: 0 0 auto; font-size: .68rem; color: var(--ink-3); }
 .history__lead {
+  flex: 1 1 auto; min-width: 0;
   font-size: .84rem; color: var(--ink-2);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.history__body { padding: 0 var(--s4) var(--s4); }
+.history__body { padding: 0 var(--s4) var(--s4); min-width: 0; overflow-wrap: break-word; }
 .history__itemfoot {
   display: flex; align-items: center; justify-content: flex-end; gap: var(--s2);
   margin-top: var(--s4); padding-top: var(--s3); border-top: 1px dashed var(--line);

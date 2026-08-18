@@ -115,6 +115,9 @@
 
     <!-- 振り返り（会話を終えたあとに生成される） -->
     <section class="review" id="review" hidden></section>
+
+    <!-- 過去の会話履歴 -->
+    <section class="history" id="history" hidden></section>
   </div>
 </main>
 
@@ -134,9 +137,11 @@
      （この学校は GitHub Pages に静的ミラーされるため）。
      その代わり APIキーは社長のブラウザの localStorage に置く。
    ・会話を終えると、そのときのログを安いテキストモデル（gpt-4o-mini）に
-     渡して「振り返り」を作る。localStorage に先生ごと3件だけ残し、
-     次に同じ先生を開いたときの指示に前回ぶんを1件だけ混ぜる。
-     振り返りは Markdown ファイルとしてダウンロードもできる
+     渡して「振り返り」を作る。localStorage に先生ごと直近 REPORT_KEEP 件を
+     日時つきで残し、ページ下部に「これまでの会話」として一覧表示する
+     （個別削除・全削除ができる）。次に同じ先生を開いたときは、直近数件の
+     傾向を指示に混ぜて、前回までの続きとして話し始められるようにする。
+     振り返りは Markdown ファイルとしてもダウンロードできる
      （localStorage だけだと端末を変えたときに残らないため）。
    ・他ページは file:// 対策で ES5 で書いてあるが、このページは
      RTCPeerConnection / fetch / Promise が前提なので async/await を使う。
@@ -163,7 +168,8 @@
   const CHAT_URL     = 'https://api.openai.com/v1/chat/completions';
   const REPORT_MODEL = 'gpt-4o-mini';
   const REPORT_STORE = 'maeda-school-review-log';
-  const REPORT_KEEP  = 3;      // 先生1人あたり保存する件数
+  const REPORT_KEEP  = 50;     // 先生1人あたり保存する件数（履歴として残すので多めに）
+  const MEMO_RECENT  = 3;      // 次の会話の指示に混ぜる、直近何件ぶんの傾向か
   const LOG_TURNS    = 40;     // レポートに渡す発言数の上限（末尾から）
   const LOG_CHARS    = 6000;   // 同・文字数の上限。長話でも料金が跳ねないように
 
@@ -237,6 +243,7 @@
       '講義はしません。本物の日常会話と同じテンポで、相づちと短い質問を混ぜてキャッチボールを続けてください。一度に喋るのは2〜3文までにします。',
       '生徒の英語に文法・単語・言い回しの間違いがあれば、会話を止めすぎない範囲でその都度やさしく指摘し、正しい言い方を一度だけ示してから、何事もなかったように話を続けてください。通じている表現をわざわざ言い換えさせたり、細かすぎる指摘を重ねたりはしません。',
       '間違いがなければ一言ほめて、次の質問につなげます。',
+      '生徒が日本語で「どういう意味？」「これって英語で何て言う？」のように聞き返してきたときは、そこは英語の会話を中断してかまいません。日本語で、文法の仕組みや正しい言い方、細かいニュアンスの違いまで丁寧に説明してください。説明が終わったら、また英語の会話に戻ります。',
       '生徒が黙っているときは、こちらから話題を振ってください。',
       '最初のひとことは、名乗ってから軽い雑談の質問をひとつ投げる形にします。',
       t.tone ? '話し方の指針: ' + t.tone : ''
@@ -245,12 +252,12 @@
 
   function instructionsFor(t) {
     const lines = talkLines(t);
-    const memo = lastReportMemo();
+    const memo = recentReportsMemo();
     if (memo) {
-      lines.push('--- 前回この生徒と話したときの振り返り ---');
+      lines.push('--- これまでこの生徒と話してきた記録（新しい順） ---');
       lines.push(memo);
       lines.push('--- ここまで ---');
-      lines.push('前回の続きとして始めてかまいません。ただし、この振り返りをそのまま読み上げないこと。話の流れで自然に触れる程度にします。');
+      lines.push('この生徒がこれまで何度もつまずいてきた点や、繰り返し出てくる癖があれば、今日の会話でも意識して見てあげてください。前回の続きとして始めてかまいませんが、この記録をそのまま読み上げないこと。話の流れで自然に触れる程度にします。');
     }
     return lines.filter(Boolean).join('\n');
   }
@@ -769,22 +776,41 @@
     } catch (e) { /* 容量超過・プライベートモードなど。黙って諦める */ }
   }
 
-  /* 次に同じ先生を開いたとき、指示に混ぜる1件ぶん */
-  function lastReportMemo() {
-    const last = readReports(teacher.id)[0];
-    if (!last || !last.report) return '';
-    const r = last.report, rows = [];
-    if (last.at) rows.push('日付: ' + String(last.at).slice(0, 10));
-    if (r.summary) rows.push('前回の内容: ' + cut(r.summary, 300));
-    if (Array.isArray(r.fixes) && r.fixes.length) {
-      rows.push('前回つまずいた点: ' + r.fixes.slice(0, 3).map(function (f) {
-        return cut([f && f.before, f && f.after].filter(Boolean).join(' → '), 100);
-      }).filter(Boolean).join(' / '));
-    }
-    if (Array.isArray(r.next) && r.next.length) {
-      rows.push('次回の課題: ' + r.next.slice(0, 3).map(function (x) { return cut(x, 100); }).join(' / '));
-    }
-    return rows.join('\n');
+  /* at（ISO日時、ミリ秒精度でほぼ一意）を鍵に1件だけ消す */
+  function deleteReport(id, at) {
+    try {
+      const all = readAllReports();
+      all[id] = readReports(id).filter(function (e) { return e.at !== at; });
+      localStorage.setItem(REPORT_STORE, JSON.stringify(all));
+    } catch (e) {}
+  }
+
+  function clearReports(id) {
+    try {
+      const all = readAllReports();
+      delete all[id];
+      localStorage.setItem(REPORT_STORE, JSON.stringify(all));
+    } catch (e) {}
+  }
+
+  /* 次に同じ先生を開いたとき、指示に混ぜる。直近 MEMO_RECENT 件ぶんを
+     まとめて渡すことで、1回だけでなく繰り返しのミスや傾向にも気づけるようにする。
+     ここが「Macが生徒を覚えて成長する」の実体。 */
+  function recentReportsMemo() {
+    const list = readReports(teacher.id).slice(0, MEMO_RECENT);
+    if (!list.length) return '';
+    return list.map(function (entry, i) {
+      const r = entry && entry.report;
+      if (!r) return '';
+      const rows = [(i + 1) + '. ' + (entry.at ? String(entry.at).slice(0, 10) : '(日付不明)')];
+      if (r.summary) rows.push('   内容: ' + cut(r.summary, 200));
+      if (Array.isArray(r.fixes) && r.fixes.length) {
+        rows.push('   つまずいた点: ' + r.fixes.slice(0, 3).map(function (f) {
+          return cut([f && f.before, f && f.after].filter(Boolean).join(' → '), 80);
+        }).filter(Boolean).join(' / '));
+      }
+      return rows.join('\n');
+    }).filter(Boolean).join('\n');
   }
 
   /* ---- 会話ログの取り出し ---- */
@@ -1052,6 +1078,7 @@
       const at = new Date().toISOString();
       paintReport(rep, at);
       saveReport(teacher.id, { at: at, report: rep });
+      renderHistory();
     } catch (e) {
       paintFailed();
     } finally {
@@ -1060,13 +1087,107 @@
   }
 
   /* --------------------------------------------------
+     9-b. これまでの会話（履歴の一覧・削除）
+     -------------------------------------------------- */
+  const historyBox = $('history');
+
+  function historyItem(entry) {
+    const r = entry.report || {};
+    const item = doc.createElement('details');
+    item.className = 'history__item';
+
+    const head = doc.createElement('summary');
+    head.appendChild(el('span', 'history__when mono', stamp(entry.at)));
+    head.appendChild(el('span', 'history__lead', r.summary ? cut(r.summary, 70) : '（まとめなし）'));
+    item.appendChild(head);
+
+    const body = el('div', 'history__body');
+    if (r.summary) body.appendChild(el('p', 'review__lead', r.summary));
+
+    if (Array.isArray(r.fixes) && r.fixes.length) {
+      const sec = el('div', 'review__sec');
+      sec.appendChild(el('p', 'review__label', '直しておく英語'));
+      for (let i = 0; i < r.fixes.length; i++) {
+        const f = r.fixes[i];
+        const row = el('div', 'review__fix');
+        if (f.before) row.appendChild(el('span', 'x', f.before));
+        if (f.after)  row.appendChild(el('span', 'o', f.after));
+        if (f.note)   row.appendChild(el('span', 'memo', f.note));
+        sec.appendChild(row);
+      }
+      body.appendChild(sec);
+    }
+    if (Array.isArray(r.good) && r.good.length) body.appendChild(listSec('よかった点', r.good));
+    if (Array.isArray(r.next) && r.next.length) body.appendChild(listSec('次回の課題', r.next));
+
+    const foot = el('div', 'history__itemfoot');
+    const dl = doc.createElement('button');
+    dl.type = 'button';
+    dl.className = 'review__dl';
+    dl.textContent = '⬇ ファイルで保存';
+    dl.addEventListener('click', function (e) { e.stopPropagation(); downloadReport(r, entry.at); });
+    foot.appendChild(dl);
+
+    const del = doc.createElement('button');
+    del.type = 'button';
+    del.className = 'history__del';
+    del.textContent = '削除';
+    del.addEventListener('click', function (e) {
+      e.stopPropagation();
+      if (!window.confirm('この会話の記録を削除します。よろしいですか？')) return;
+      deleteReport(teacher.id, entry.at);
+      renderHistory();
+    });
+    foot.appendChild(del);
+    body.appendChild(foot);
+
+    item.appendChild(body);
+    return item;
+  }
+
+  function renderHistory() {
+    const list = readReports(teacher.id);
+    historyBox.textContent = '';
+    if (!list.length) { historyBox.hidden = true; return; }
+    historyBox.hidden = false;
+
+    const head = el('div', 'history__head');
+    head.appendChild(el('h2', null, 'これまでの会話（' + list.length + '件）'));
+    const clearAll = doc.createElement('button');
+    clearAll.type = 'button';
+    clearAll.className = 'history__clearall';
+    clearAll.textContent = 'すべて削除';
+    clearAll.addEventListener('click', function () {
+      if (!window.confirm('保存されている ' + list.length + '件の会話の記録を、すべて削除します。よろしいですか？')) return;
+      clearReports(teacher.id);
+      renderHistory();
+    });
+    head.appendChild(clearAll);
+    historyBox.appendChild(head);
+
+    const wrap = el('div', 'history__list');
+    for (let i = 0; i < list.length; i++) wrap.appendChild(historyItem(list[i]));
+    historyBox.appendChild(wrap);
+  }
+
+  /* --------------------------------------------------
      10. 操作
      -------------------------------------------------- */
   $('start').addEventListener('click', connect);
-  $('end').addEventListener('click', function () {
+  $('end').addEventListener('click', async function () {
     clearAlerts();
     hangup('idle');   // 先に切る。マイクを止める＝課金を止めるのが最優先
-    makeReport();     // 振り返りはそのあと。失敗しても会話の記録は残る
+
+    /* 振り返りの生成中にもう一度「話す」を押されると、makeReport の
+       reportBusy ガードに弾かれて今回ぶんの振り返りが保存されずに消える
+       （連続セッションで履歴が欠落する）。生成が終わるまで次の開始を
+       待たせることで、そもそも同時に走らないようにする。 */
+    $('start').disabled = true;
+    try {
+      await makeReport();
+    } finally {
+      $('start').disabled = false;
+    }
   });
 
   /* 閉じ忘れ・移動でつなぎっぱなしにしない（課金が続くため） */
@@ -1078,6 +1199,7 @@
      -------------------------------------------------- */
   paintKeyState();
   setMode('idle');
+  renderHistory();
   if (!readKey()) $('keyinput').focus();
 })();
 </script>

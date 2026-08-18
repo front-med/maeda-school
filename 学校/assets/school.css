@@ -978,6 +978,55 @@ body {
   border: 1px dashed var(--line); border-radius: var(--r-md);
 }
 
+/* これまでの会話（履歴の一覧）。振り返りカードと同じ書式を使い回すが、
+   1件ずつ畳んでおいて、開いたときだけ review__* と同じ中身が見える形にする。 */
+.history { margin-top: var(--s6, 40px); padding-top: var(--s5); border-top: 1px solid var(--line); }
+.history__head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: var(--s3);
+  flex-wrap: wrap; margin-bottom: var(--s4);
+}
+.history__head h2 {
+  font-family: var(--mincho); font-size: 1rem; font-weight: 600; letter-spacing: .06em;
+}
+.history__clearall {
+  font-family: var(--mono); font-size: .68rem; letter-spacing: .04em; color: var(--ink-3);
+  text-decoration: underline; text-underline-offset: 3px;
+}
+.history__clearall:hover { color: var(--ink); }
+
+.history__list { display: grid; gap: var(--s3); }
+.history__item {
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  background: var(--surface);
+}
+.history__item summary {
+  display: flex; align-items: baseline; gap: var(--s3);
+  padding: var(--s3) var(--s4); cursor: pointer;
+  list-style: none;
+}
+.history__item summary::-webkit-details-marker { display: none; }
+.history__item summary::before {
+  content: "▸"; flex: 0 0 auto; color: var(--ink-3);
+  transition: transform .15s ease;
+}
+.history__item[open] summary::before { transform: rotate(90deg); }
+.history__when { flex: 0 0 auto; font-size: .68rem; color: var(--ink-3); }
+.history__lead {
+  font-size: .84rem; color: var(--ink-2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.history__body { padding: 0 var(--s4) var(--s4); }
+.history__itemfoot {
+  display: flex; align-items: center; justify-content: flex-end; gap: var(--s2);
+  margin-top: var(--s4); padding-top: var(--s3); border-top: 1px dashed var(--line);
+}
+.history__del {
+  border: 1px solid var(--line-2); border-radius: 999px;
+  padding: 4px 13px; color: var(--ink-3);
+  font-family: var(--mono); font-size: .68rem; letter-spacing: .04em;
+}
+.history__del:hover { color: #b23; border-color: #b23; }
+
 /* APIキーの設定 */
 .keyform {
   margin-top: var(--s5); padding: clamp(18px, 3vw, 24px);

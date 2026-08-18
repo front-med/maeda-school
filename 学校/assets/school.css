@@ -910,6 +910,65 @@ body {
   animation: caret 1.1s steps(1) infinite;
 }
 
+/* 振り返り — 会話を終えたあとに返ってくる「答案」。
+   会話の吹き出しが流れていく時間の記録なのに対して、こちらは残す紙。
+   だから吹き出しと違って角を立て、先生の色を背表紙として1本だけ入れる。 */
+.review { margin-top: var(--s5); }
+.review__card {
+  padding: clamp(18px, 3vw, 26px);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--tc, var(--line-2));
+  border-radius: var(--r-md);
+}
+.review__head { display: flex; align-items: baseline; gap: var(--s3); flex-wrap: wrap; }
+.review__title {
+  font-family: var(--mincho); font-size: 1.02rem; font-weight: 600; letter-spacing: .08em;
+}
+.review__when {
+  margin-left: auto; font-family: var(--mono); font-size: .66rem;
+  letter-spacing: .08em; color: var(--ink-3);
+}
+.review__lead { margin-top: var(--s3); font-size: .92rem; line-height: 1.9; color: var(--ink); }
+.review__sec { margin-top: var(--s4); padding-top: var(--s4); border-top: 1px dashed var(--line); }
+.review__label {
+  font-family: var(--mono); font-size: .62rem; letter-spacing: .2em;
+  color: var(--ink-3); margin-bottom: var(--s2);
+}
+.review__list li {
+  position: relative; padding-left: var(--s4);
+  font-size: .88rem; line-height: 1.85; color: var(--ink-2);
+}
+.review__list li + li { margin-top: var(--s2); }
+.review__list li::before {
+  content: ""; position: absolute; left: 0; top: .88em;
+  width: 8px; height: 2px; border-radius: 1px;
+  background: var(--t-mid, var(--line-2));
+}
+.review__fix + .review__fix { margin-top: var(--s4); }
+.review__fix .x { display: block; font-size: .88rem; color: var(--ink-3); text-decoration: line-through; }
+.review__fix .o { display: block; font-size: .92rem; font-weight: 600; color: var(--t-text, var(--ink)); }
+.review__fix .memo { display: block; font-size: .8rem; color: var(--ink-3); line-height: 1.8; }
+.review__foot {
+  margin-top: var(--s4); font-family: var(--mono); font-size: .64rem;
+  letter-spacing: .06em; color: var(--ink-3);
+}
+/* 生成中・失敗時。会話の本体ではないので、どちらも小さく静かに置く */
+.review__wait {
+  display: flex; align-items: center; gap: var(--s2);
+  font-family: var(--mono); font-size: .7rem; letter-spacing: .12em; color: var(--ink-3);
+}
+.review__wait::before {
+  content: ""; flex: 0 0 auto; width: 12px; height: 12px; border-radius: 50%;
+  border: 2px solid var(--line-2); border-top-color: var(--tc, var(--ink-3));
+  animation: orbspin .8s linear infinite;
+}
+.review__mute {
+  font-size: .78rem; line-height: 1.8; color: var(--ink-3);
+  padding: var(--s3) var(--s4);
+  border: 1px dashed var(--line); border-radius: var(--r-md);
+}
+
 /* APIキーの設定 */
 .keyform {
   margin-top: var(--s5); padding: clamp(18px, 3vw, 24px);

@@ -97,14 +97,18 @@
   })();
 
   /* ---------- 先生カード ---------- */
-  /* interactive の先生（対話専任）は板書講義を持たないので、
-     講義一覧ではなく対話ページへ送る。件数も出さない。 */
+  /* 声で話せる先生は2種類ある。
+       interactive … 対話専任。板書講義を持たないので、名前も件数も対話ページへ送り、
+                     件数の代わりに「対話」と出す
+       review      … 板書講義を書く本来の先生＋復習部屋。名前と件数は講義一覧のまま
+                     置いておき、カード下端にだけ復習部屋への入口を足す
+                     （講義への導線が名前と件数に2つ残るので、足すのは復習だけでよい） */
   function card(t) {
     var n = counts[t.id] || 0;
     var live = t.interactive === true;
-    var home = live
-      ? '対話.html?teacher=' + encodeURIComponent(t.id)
-      : 'index.html?teacher=' + encodeURIComponent(t.id);
+    var review = !live && t.review === true;
+    var talkHref = '対話.html?teacher=' + encodeURIComponent(t.id);
+    var home = live ? talkHref : 'index.html?teacher=' + encodeURIComponent(t.id);
 
     var art = doc.createElement('article');
     art.className = 'tcard';
@@ -175,20 +179,22 @@
     var foot = el('div', 'tcard__foot');
     foot.appendChild(el('span', null, '着任 ' + (t.joined || '—')));
     foot.appendChild(el('span', null, t.founding === false ? '新任採用' : '開校時から'));
+    function go(href, label) {
+      var a = doc.createElement('a');
+      a.className = 'tcard__go';
+      a.href = href;
+      a.textContent = label;
+      return a;
+    }
     if (live) {
-      var talk = doc.createElement('a');
-      talk.className = 'tcard__go';
-      talk.href = home;
-      talk.textContent = t.name + 'と話す →';
-      foot.appendChild(talk);
-    } else if (n) {
-      var go = doc.createElement('a');
-      go.className = 'tcard__go';
-      go.href = home;
-      go.textContent = '講義を見る →';
-      foot.appendChild(go);
+      foot.appendChild(go(talkHref, t.name + 'と話す →'));
     } else {
-      foot.appendChild(el('span', 'tcard__go is-mute', '講義はまだありません'));
+      /* 板書の先生。講義があれば講義へ、復習部屋を持っていれば復習へ。
+         復習部屋がある先生に「講義はまだありません」は出さない
+         （講義0件でも部屋は開き、雑談から始まるため） */
+      if (n) foot.appendChild(go(home, '講義を見る →'));
+      else if (!review) foot.appendChild(el('span', 'tcard__go is-mute', '講義はまだありません'));
+      if (review) foot.appendChild(go(talkHref, t.name + '先生と復習する →'));
     }
     box.appendChild(foot);
 

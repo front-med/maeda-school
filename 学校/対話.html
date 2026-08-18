@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<title>LL教室 — 前田学校</title>
+<title>対話 — 前田学校</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.92em' font-size='90'%3E🏫%3C/text%3E%3C/svg%3E">
 <link rel="apple-touch-icon" href="assets/icon-180.png">
 <link rel="manifest" href="manifest.webmanifest">
@@ -63,7 +63,7 @@
     <p class="note">
       <span class="note__mark" aria-hidden="true">💸</span>
       <span>音声での会話は <b>つないでいる時間ぶんOpenAIに課金される</b>（文字のやりとりよりかなり割高）。
-      話し終わったら「会話を終了」を押して切ること。閉じ忘れ防止に、接続中は経過時間を出しています。</span>
+      話し終わったら「<span id="endword">会話を終了</span>」を押して切ること。閉じ忘れ防止に、接続中は経過時間を出しています。</span>
     </p>
 
     <!-- APIキーの登録（未設定のときだけ出る） -->
@@ -112,6 +112,9 @@
 
     <!-- 会話ログ -->
     <section class="log" id="log"></section>
+
+    <!-- 振り返り（会話を終えたあとに生成される） -->
+    <section class="review" id="review" hidden></section>
   </div>
 </main>
 
@@ -122,13 +125,19 @@
 <script src="assets/school.js"></script>
 <script>
 /* ===========================================================
-   対話（LL教室） — 板書を持たない先生と、その場で声で話す
+   対話 — 先生と、その場で声で話す部屋
    -----------------------------------------------------------
-   ・?teacher=<id> で データ/teachers.js を引く。interactive: true の
-     先生だけがこのページに入れる（今後 Mac 以外が増えても動く）。
+   ・?teacher=<id> で データ/teachers.js を引く。ここに入れるのは2種類だけ:
+       interactive: true … 板書を書かない対話専任（Mac）。英語で自由会話する
+       review: true      … 板書講義を書く本来の先生。受講済みの講義を
+                           教材に、日本語で復習を手伝う「復習部屋」
+     どちらでもない先生は入口で止める。
    ・OpenAI Realtime API に WebRTC で直接つなぐ。サーバーは立てない
      （この学校は GitHub Pages に静的ミラーされるため）。
      その代わり APIキーは社長のブラウザの localStorage に置く。
+   ・会話を終えると、そのときのログを安いテキストモデル（gpt-4o-mini）に
+     渡して「振り返り」を作る。localStorage に先生ごと3件だけ残し、
+     次に同じ先生を開いたときの指示に前回ぶんを1件だけ混ぜる。
    ・他ページは file:// 対策で ES5 で書いてあるが、このページは
      RTCPeerConnection / fetch / Promise が前提なので async/await を使う。
      使えないブラウザではそもそも会話が成立しない。
@@ -149,6 +158,18 @@
   const SECRET_URL  = 'https://api.openai.com/v1/realtime/client_secrets';
   const TRANSCRIBE  = 'gpt-4o-mini-transcribe';   // 生徒の発話を文字に起こすモデル
   const KEY_STORE   = 'maeda-school-openai-key';
+
+  /* 振り返り。音声より桁違いに安いテキストモデルを使う */
+  const CHAT_URL     = 'https://api.openai.com/v1/chat/completions';
+  const REPORT_MODEL = 'gpt-4o-mini';
+  const REPORT_STORE = 'maeda-school-review-log';
+  const REPORT_KEEP  = 3;      // 先生1人あたり保存する件数
+  const LOG_TURNS    = 40;     // レポートに渡す発言数の上限（末尾から）
+  const LOG_CHARS    = 6000;   // 同・文字数の上限。長話でも料金が跳ねないように
+
+  /* 復習の教材にする講義の件数。多いほど話題は増えるが、
+     そのぶん毎回の接続でトークンを食うのでこの辺で止める */
+  const DIGEST_MAX   = 6;
 
   /* --------------------------------------------------
      1. 担当の先生を決める
@@ -175,7 +196,12 @@
     fatal('その先生は在籍していません', '「' + wanted + '」という先生は職員室の名簿にありません。', '職員室.html');
     return;
   }
-  if (teacher.interactive !== true) {
+  /* この部屋の役目。'talk' は英会話の相手（Mac）、'review' は復習の相手。
+     interactive を優先するので、両方 true でも Mac の意味は変わらない。 */
+  const MODE = teacher.interactive === true ? 'talk'
+             : (teacher.review === true ? 'review' : null);
+
+  if (!MODE) {
     fatal(teacher.name + '先生は対話をしていません',
           'この先生は板書での講義を担当しています。講義は正門から読めます。', 'index.html?teacher=' + encodeURIComponent(teacher.id));
     return;
@@ -186,19 +212,73 @@
   /* 先生カラーをページ全体に配る（--tf / --tfon はボタンの地色に使う） */
   S.applyTint($('talk'), teacher.color);
 
+  const REVIEW = (MODE === 'review');
+
+  /* --------------------------------------------------
+     1-b. 復習の教材 — この先生が書いた講義のダイジェスト
+     -------------------------------------------------- */
+  /* 板書の本文（board.points）は入れない。全部渡すと1回つなぐだけで
+     数万トークンになり、一言も話す前から料金が乗る。
+     「何を習ったか」を思い出させるのに要る分だけにしてある。 */
+  function cut(s, n) {
+    const t = String(s === null || s === undefined ? '' : s).trim().replace(/\s+/g, ' ');
+    return t.length > n ? t.slice(0, n) + '…' : t;
+  }
+
+  function lectureDigest(t) {
+    if (!REVIEW) return '';
+    const mine = S.search(S.views, { teacher: t.id }).slice(0, DIGEST_MAX);  // 新しい順
+    if (!mine.length) return '';
+    return mine.map(function (v, i) {
+      const rows = [(i + 1) + '. 「' + cut(v.lec.title, 60) + '」（' + (v.lec.date || '') + '）'];
+      if (v.lec.summary) rows.push('   要点: ' + cut(v.lec.summary, 140));
+      const terms = v.terms.slice(0, 8)
+        .map(function (x) { return String((x && x.term) || '').trim(); })
+        .filter(Boolean);
+      if (terms.length) rows.push('   出てきた用語: ' + terms.join('・'));
+      if (v.lec.action) rows.push('   今日の一手: ' + cut(v.lec.action, 90));
+      return rows.join('\n');
+    }).join('\n');
+  }
+
+  const DIGEST = lectureDigest(teacher);
+
+  /* --------------------------------------------------
+     1-c. 画面の文言
+     -------------------------------------------------- */
   $('femoji').textContent = teacher.emoji || '🎙';
   $('fname').textContent = teacher.name;
   $('fsub').textContent = (teacher.subject || '') + ' / ' + (teacher.room || '');
   if (teacher.catchphrase) { $('fphrase').textContent = teacher.catchphrase; $('fphrase').hidden = false; }
   if (teacher.profile)     { $('fprofile').textContent = teacher.profile;    $('fprofile').hidden = false; }
-  $('startlabel').textContent = teacher.name + 'と話す';
-  $('hint').textContent = 'ボタンを押すとマイクの使用を聞かれます。許可したら、そのまま ' + teacher.name + ' に英語で話しかけてください。'
-                        + '言い終わると自動で返事が返ってきます（ボタンを押しっぱなしにする必要はありません）。';
+
+  /* 声の球はこの先生そのもの。Mac は絵文字が 🎙 なので見た目は変わらない */
+  $('orbface').textContent = teacher.emoji || '🎙';
+
+  $('startlabel').textContent = REVIEW ? (teacher.name + '先生と復習する') : (teacher.name + 'と話す');
+  /* 終了ボタンの文言は、上の課金の注記でも同じ言葉を指しているので揃える */
+  $('end').textContent = REVIEW ? '復習を終了' : '会話を終了';
+  $('endword').textContent = $('end').textContent;
+
+  $('hint').textContent = REVIEW
+    ? ('ボタンを押すとマイクの使用を聞かれます。許可したら、そのまま日本語で話しかけてください。'
+       + '言い終わると自動で返事が返ってきます（ボタンを押しっぱなしにする必要はありません）。'
+       + (DIGEST
+            ? '受講済みの講義から出題されるので、思い出しながら自分の言葉で答えてください。'
+            : teacher.name + '先生の講義はまだ1件もないので、今日は雑談から始まります。'))
+    : ('ボタンを押すとマイクの使用を聞かれます。許可したら、そのまま ' + teacher.name + ' に英語で話しかけてください。'
+       + '言い終わると自動で返事が返ってきます（ボタンを押しっぱなしにする必要はありません）。');
+
   doc.title = teacher.room + ' — ' + teacher.name + '｜前田学校';
 
-  /* 先生の人格。teachers.js の tone をそのまま指示に混ぜて、
-     名簿を直せば喋り方も変わるようにしておく。 */
-  function instructionsFor(t) {
+  /* --------------------------------------------------
+     1-d. 先生の人格
+     -------------------------------------------------- */
+  /* teachers.js の tone をそのまま指示に混ぜて、名簿を直せば
+     喋り方も変わるようにしておく。ここは2種類の部屋で分かれる。 */
+
+  // 対話専任（Mac）— 英語で自由会話し、崩れたところだけ直す
+  function talkLines(t) {
     return [
       'あなたは日本の私塾「前田学校」の' + (t.room || 'LL教室') + 'で働く英会話講師「' + t.name + '」です。フレンドリーな男性で、生徒と1対1で話しています。',
       '会話は英語で進めます。生徒が固まったとき、または意味が伝わっていないと感じたときだけ、短い日本語を挟んでかまいません。',
@@ -208,7 +288,46 @@
       '生徒が黙っているときは、こちらから話題を振ってください。',
       '最初のひとことは、名乗ってから軽い雑談の質問をひとつ投げる形にします。',
       t.tone ? '話し方の指針: ' + t.tone : ''
-    ].filter(Boolean).join('\n');
+    ];
+  }
+
+  // 復習部屋 — 自分が書いた講義を教材に、日本語で思い出させる
+  function reviewLines(t) {
+    const base = [
+      'あなたは日本の私塾「前田学校」の' + (t.room || '教室') + 'で「' + (t.subject || '担当教科') + '」を受け持つ教師「' + t.name + '」です。生徒と1対1で、日本語で話しています。',
+      'いまは授業の時間ではなく、放課後の復習の時間です。板書を書き直すのではなく、生徒がすでに受けた講義を一緒に思い出す係だと考えてください。',
+      '一方的に講義をしないこと。あなたが続けて喋るのは2〜3文までにして、必ず質問で返します。答えを先に言わず、生徒自身の言葉で説明させてください。',
+      '生徒の説明が合っていたら、どこが良かったのかを具体的に言ってほめ、そこから一歩踏み込んだ質問につなげます。',
+      '理解がずれていたら、頭ごなしに否定しないこと。「そこまでは合っています」と拾ってから、正しい理解を短く示し、もう一度生徒の言葉で言い直してもらいます。',
+      '生徒が詰まったらヒントを一つだけ出して待ちます。それでも出てこないときに初めて答えを言い、言い終わったら必ず「では、いまの話を自分の言葉で言うと？」と返してください。',
+      '話題が尽きたときや生徒が黙ったときは、あなたから次の論点を出します。',
+      t.tone ? '話し方の指針: ' + t.tone : ''
+    ];
+
+    if (DIGEST) {
+      base.push('--- ここから、この生徒があなたの講義で受講済みの内容（新しい順）---');
+      base.push(DIGEST);
+      base.push('--- ここまで ---');
+      base.push('復習はこの受講済みの範囲から選んで進めます。最初のひとことは、名乗ったうえで、上の一覧から2〜3件を挙げて「今日はどれを復習しますか」と選ばせる形にしてください。');
+      base.push('一覧に無い話題は、生徒のほうから振られたときだけ扱ってかまいません。一覧に無い講義を「前にやりましたね」と言わないこと。');
+    } else {
+      base.push('この生徒は、あなたの講義をまだ1件も受講していません。復習する材料が無いので、今日は雑談として進めてください。');
+      base.push('あなたの担当分野について、生徒がいま困っていること・気になっていることを質問で引き出し、興味の在りかを探ります。教科書的な説明を並べず、生徒に喋らせるほうを優先してください。');
+      base.push('最初のひとことは、名乗ってから「この分野で今いちばん気になっていることは何ですか」と尋ねる形にします。');
+    }
+    return base;
+  }
+
+  function instructionsFor(t) {
+    const lines = REVIEW ? reviewLines(t) : talkLines(t);
+    const memo = lastReportMemo();
+    if (memo) {
+      lines.push('--- 前回この生徒と話したときの振り返り ---');
+      lines.push(memo);
+      lines.push('--- ここまで ---');
+      lines.push('前回の続きとして始めてかまいません。ただし、この振り返りをそのまま読み上げないこと。話の流れで自然に触れる程度にします。');
+    }
+    return lines.filter(Boolean).join('\n');
   }
 
   /* --------------------------------------------------
@@ -299,6 +418,10 @@
   const bubbles = Object.create(null);   // item_id -> {box, text}
   let logEmpty = null;
 
+  /* 1ページ内で2回目・3回目と話すことがある。振り返りに前回ぶんの
+     吹き出しを混ぜないよう、吹き出しに何回目の会話かを刻んでおく */
+  let sessionSeq = 0;
+
   function showEmpty() {
     if (logEmpty) return;
     logEmpty = el('p', 'log__empty', 'ここに会話の書き起こしが残ります。');
@@ -319,6 +442,7 @@
     hideEmpty();
     const stick = nearBottom();
     const box = el('div', 'bub bub--' + (who === 'me' ? 'me' : 'ai') + ' is-live');
+    box.setAttribute('data-session', String(sessionSeq));
     box.appendChild(el('span', 'bub__who', who === 'me' ? 'YOU' : teacher.name.toUpperCase()));
     const text = el('span', 'bub__text');
     box.appendChild(text);
@@ -466,6 +590,11 @@
 
   async function connect() {
     clearAlerts();
+
+    /* 2回目以降の会話。前回の振り返りは画面から下げ、吹き出しの刻印を
+       次の番号に進めて、振り返りに前回ぶんが混ざらないようにする */
+    sessionSeq++;
+    clearReview();
 
     const key = readKey();
     if (!key) { paintKeyState(); return; }
@@ -680,15 +809,300 @@
     }
   }
 
+  /* --------------------------------------------------
+     9. 振り返り — 会話を終えたときに1回だけ作る
+     -------------------------------------------------- */
+  /* 声の会話はつないでいる時間ぶん課金されるが、こちらはテキストを
+     1回POSTするだけで桁が2つ違う。それでも長話を丸ごと送る意味は無いので、
+     末尾から LOG_TURNS 発言・LOG_CHARS 文字までに切って渡す。
+     あくまで付加機能。失敗しても会話の記録（吹き出し）は残るし、
+     エラーは赤い警告ではなく小さな注記で済ませる。 */
+
+  const reviewBox = $('review');
+  let reportBusy = false;
+
+  /* ---- 保存（先生ごとに直近 REPORT_KEEP 件だけ） ---- */
+  function readAllReports() {
+    try {
+      const j = JSON.parse(localStorage.getItem(REPORT_STORE) || '{}');
+      return (j && typeof j === 'object' && !Array.isArray(j)) ? j : {};
+    } catch (e) { return {}; }
+  }
+
+  function readReports(id) {
+    const list = readAllReports()[id];
+    return Array.isArray(list) ? list : [];
+  }
+
+  function saveReport(id, entry) {
+    try {
+      const all = readAllReports();
+      const list = readReports(id);
+      list.unshift(entry);
+      all[id] = list.slice(0, REPORT_KEEP);
+      localStorage.setItem(REPORT_STORE, JSON.stringify(all));
+    } catch (e) { /* 容量超過・プライベートモードなど。黙って諦める */ }
+  }
+
+  /* 次に同じ先生を開いたとき、指示に混ぜる1件ぶん */
+  function lastReportMemo() {
+    const last = readReports(teacher.id)[0];
+    if (!last || !last.report) return '';
+    const r = last.report, rows = [];
+    if (last.at) rows.push('日付: ' + String(last.at).slice(0, 10));
+    if (r.summary) rows.push('前回の内容: ' + cut(r.summary, 300));
+    if (Array.isArray(r.fixes) && r.fixes.length) {
+      rows.push('前回つまずいた点: ' + r.fixes.slice(0, 3).map(function (f) {
+        return cut([f && f.before, f && f.after].filter(Boolean).join(' → '), 100);
+      }).filter(Boolean).join(' / '));
+    }
+    if (Array.isArray(r.next) && r.next.length) {
+      rows.push('次回の課題: ' + r.next.slice(0, 3).map(function (x) { return cut(x, 100); }).join(' / '));
+    }
+    return rows.join('\n');
+  }
+
+  /* ---- 会話ログの取り出し ---- */
+  function collectTurns() {
+    const nodes = log.querySelectorAll('.bub');
+    const rows = [];
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i];
+      if (n.getAttribute('data-session') !== String(sessionSeq)) continue;   // 今回ぶんだけ
+      const t = n.querySelector('.bub__text');
+      const s = ((t && t.textContent) || '').trim();
+      if (!s) continue;
+      rows.push({ me: n.classList.contains('bub--me'), text: s });
+    }
+    return rows;
+  }
+
+  /* 切るのは頭から。会話は後半のほうが振り返りに効く */
+  function transcriptOf(rows) {
+    const tail = rows.slice(-LOG_TURNS);
+    const out = [];
+    let total = 0;
+    for (let i = tail.length - 1; i >= 0; i--) {
+      const line = (tail[i].me ? '生徒' : teacher.name) + ': ' + tail[i].text;
+      if (out.length && total + line.length > LOG_CHARS) break;
+      out.unshift(line);
+      total += line.length;
+    }
+    return out.join('\n');
+  }
+
+  /* ---- 生成 ---- */
+  function reportPrompt() {
+    const common = [
+      '出力は次のキーだけを持つJSONオブジェクト1つ。前後に文章を付けないこと。',
+      '{"summary": "会話全体のまとめ（2〜3文）", "fixes": [{"before": "…", "after": "…", "note": "…"}], "good": ["…"], "next": ["…"]}',
+      'fixes は会話に実際に出てきたものだけを入れます。無ければ空配列にすること。good と next はそれぞれ1〜3個。',
+      '会話ログに根拠が無いことは書かないでください。無理に埋めるより空にするほうが良い。',
+      '生徒本人が読むメモです。日本語で、短く具体的に書いてください。'
+    ];
+    if (REVIEW) {
+      return [
+        'あなたは学習コーチです。日本の私塾「前田学校」で、「' + (teacher.subject || '') + '」担当の教師「' + teacher.name + '」と生徒が交わした復習の会話ログを読み、生徒向けの振り返りメモを作ります。',
+        'fixes には、生徒の理解がずれていた点（before）、正しい理解（after）、一言の補足（note）を入れます。',
+        'good には生徒が自分の言葉できちんと説明できた点を、next には次の復習で詰めるべき論点を書きます。'
+      ].concat(common).join('\n');
+    }
+    return [
+      'あなたは英語学習コーチです。日本人学習者と英会話講師「' + teacher.name + '」の会話ログを読み、学習者向けの振り返りメモを作ります。',
+      'fixes には、学習者が実際に言った誤り（before）、正しい言い方（after）、なぜそうなるかの一言（note）を入れます。文法・単語・言い回しのどれでもかまいません。before と after の英文は英語のまま書きます。',
+      'good にはうまく言えた表現ややり取りを、next には次回に向けた具体的な練習の的を書きます。'
+    ].concat(common).join('\n');
+  }
+
+  /* 文字列・数値以外が返ってきたら捨てる（"[object Object]" を画面に出さない） */
+  function str(x, n) {
+    if (typeof x !== 'string' && typeof x !== 'number') return '';
+    return cut(x, n);
+  }
+
+  function normList(v) {
+    if (!Array.isArray(v)) return [];
+    const out = [];
+    for (let i = 0; i < v.length && out.length < 4; i++) {
+      const s = str(v[i], 200);
+      if (s) out.push(s);
+    }
+    return out;
+  }
+
+  function normFixes(v) {
+    if (!Array.isArray(v)) return [];
+    const out = [];
+    for (let i = 0; i < v.length && out.length < 6; i++) {
+      const f = v[i];
+      if (typeof f === 'string') {
+        const s = str(f, 200);
+        if (s) out.push({ before: '', after: s, note: '' });
+        continue;
+      }
+      if (!f || typeof f !== 'object') continue;
+      const row = { before: str(f.before, 200), after: str(f.after, 200), note: str(f.note, 200) };
+      if (row.before || row.after || row.note) out.push(row);
+    }
+    return out;
+  }
+
+  function normalizeReport(text) {
+    let raw = null;
+    try { raw = JSON.parse(text); } catch (e) { raw = null; }
+    /* JSONで返らなかったときも本文は捨てず、まとめ扱いで出す */
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      return { summary: cut(text, 600), fixes: [], good: [], next: [] };
+    }
+    return {
+      summary: str(raw.summary, 600),
+      fixes: normFixes(raw.fixes),
+      good: normList(raw.good),
+      next: normList(raw.next)
+    };
+  }
+
+  async function askReport(key, transcript) {
+    const r = await fetch(CHAT_URL, {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: REPORT_MODEL,
+        temperature: 0.3,
+        max_tokens: 700,
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: reportPrompt() },
+          { role: 'user', content: '会話ログ:\n' + transcript }
+        ]
+      })
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json();
+    const text = j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
+    if (!text) throw new Error('empty');
+    return normalizeReport(text);
+  }
+
+  /* ---- 表示 ---- */
+  function reviewCard() {
+    reviewBox.hidden = false;
+    reviewBox.textContent = '';
+    const card = el('div', 'review__card');
+    reviewBox.appendChild(card);
+    return card;
+  }
+
+  function clearReview() {
+    reviewBox.hidden = true;
+    reviewBox.textContent = '';
+  }
+
+  function paintWait() {
+    reviewCard().appendChild(el('p', 'review__wait', '振り返りを作っています…'));
+  }
+
+  function paintFailed() {
+    reviewBox.hidden = false;
+    reviewBox.textContent = '';
+    reviewBox.appendChild(el('p', 'review__mute',
+      '今回の振り返りは作れませんでした。会話の記録は上に残っています。'));
+  }
+
+  function listSec(label, items) {
+    const sec = el('div', 'review__sec');
+    sec.appendChild(el('p', 'review__label', label));
+    const ul = doc.createElement('ul');
+    ul.className = 'review__list';
+    for (let i = 0; i < items.length; i++) ul.appendChild(el('li', null, items[i]));
+    sec.appendChild(ul);
+    return sec;
+  }
+
+  function stamp(at) {
+    const d = at ? new Date(at) : new Date();
+    if (isNaN(d.getTime())) return '';
+    const two = (n) => (n < 10 ? '0' + n : String(n));
+    return (d.getMonth() + 1) + '/' + two(d.getDate()) + ' ' + two(d.getHours()) + ':' + two(d.getMinutes());
+  }
+
+  function paintReport(rep, at) {
+    const stick = nearBottom();
+    const card = reviewCard();
+
+    const head = el('div', 'review__head');
+    head.appendChild(el('h2', 'review__title', REVIEW ? '今日の復習の振り返り' : '今日の会話の振り返り'));
+    head.appendChild(el('span', 'review__when mono', stamp(at)));
+    card.appendChild(head);
+
+    if (rep.summary) card.appendChild(el('p', 'review__lead', rep.summary));
+
+    if (rep.fixes.length) {
+      const sec = el('div', 'review__sec');
+      sec.appendChild(el('p', 'review__label', REVIEW ? '直しておく理解' : '直しておく英語'));
+      for (let i = 0; i < rep.fixes.length; i++) {
+        const f = rep.fixes[i];
+        const row = el('div', 'review__fix');
+        if (f.before) row.appendChild(el('span', 'x', f.before));
+        if (f.after)  row.appendChild(el('span', 'o', f.after));
+        if (f.note)   row.appendChild(el('span', 'memo', f.note));
+        sec.appendChild(row);
+      }
+      card.appendChild(sec);
+    }
+
+    if (rep.good.length) card.appendChild(listSec('よかった点', rep.good));
+    if (rep.next.length) card.appendChild(listSec('次回の課題', rep.next));
+
+    card.appendChild(el('p', 'review__foot',
+      REPORT_MODEL + ' が会話ログから作成 ／ この端末にだけ保存（先生ごとに直近' + REPORT_KEEP + '件）'));
+
+    if (stick) window.scrollTo(0, doc.body.scrollHeight);
+  }
+
+  /* ---- 入口 ---- */
+  async function makeReport() {
+    if (reportBusy) return;
+
+    const rows = collectTurns();
+    let mine = 0, theirs = 0;
+    for (let i = 0; i < rows.length; i++) (rows[i].me ? mine++ : theirs++);
+    if (mine < 1 || theirs < 1) return;   // 1往復に満たない会話は振り返る材料が無い
+
+    const key = readKey();
+    if (!key) return;
+
+    reportBusy = true;
+    paintWait();
+    try {
+      const rep = await askReport(key, transcriptOf(rows));
+      if (!rep.summary && !rep.fixes.length && !rep.good.length && !rep.next.length) throw new Error('empty');
+      const at = new Date().toISOString();
+      paintReport(rep, at);
+      saveReport(teacher.id, { at: at, mode: MODE, report: rep });
+    } catch (e) {
+      paintFailed();
+    } finally {
+      reportBusy = false;
+    }
+  }
+
+  /* --------------------------------------------------
+     10. 操作
+     -------------------------------------------------- */
   $('start').addEventListener('click', connect);
-  $('end').addEventListener('click', function () { clearAlerts(); hangup('idle'); });
+  $('end').addEventListener('click', function () {
+    clearAlerts();
+    hangup('idle');   // 先に切る。マイクを止める＝課金を止めるのが最優先
+    makeReport();     // 振り返りはそのあと。失敗しても会話の記録は残る
+  });
 
   /* 閉じ忘れ・移動でつなぎっぱなしにしない（課金が続くため） */
   window.addEventListener('pagehide', function () { stopAll(); });
   window.addEventListener('beforeunload', function () { stopAll(); });
 
   /* --------------------------------------------------
-     9. 起動
+     11. 起動
      -------------------------------------------------- */
   paintKeyState();
   setMode('idle');

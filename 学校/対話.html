@@ -125,19 +125,19 @@
 <script src="assets/school.js"></script>
 <script>
 /* ===========================================================
-   対話 — 先生と、その場で声で話す部屋
+   対話 — Mac先生と、その場で声で話す部屋
    -----------------------------------------------------------
-   ・?teacher=<id> で データ/teachers.js を引く。ここに入れるのは2種類だけ:
-       interactive: true … 板書を書かない対話専任（Mac）。英語で自由会話する
-       review: true      … 板書講義を書く本来の先生。受講済みの講義を
-                           教材に、日本語で復習を手伝う「復習部屋」
-     どちらでもない先生は入口で止める。
+   ・?teacher=<id> で データ/teachers.js を引く。interactive: true の
+     先生だけが入れる（今のところ Mac だけ。板書を書かない対話専任で、
+     英語で自由会話する）。それ以外の先生は入口で止める。
    ・OpenAI Realtime API に WebRTC で直接つなぐ。サーバーは立てない
      （この学校は GitHub Pages に静的ミラーされるため）。
      その代わり APIキーは社長のブラウザの localStorage に置く。
    ・会話を終えると、そのときのログを安いテキストモデル（gpt-4o-mini）に
      渡して「振り返り」を作る。localStorage に先生ごと3件だけ残し、
      次に同じ先生を開いたときの指示に前回ぶんを1件だけ混ぜる。
+     振り返りは Markdown ファイルとしてダウンロードもできる
+     （localStorage だけだと端末を変えたときに残らないため）。
    ・他ページは file:// 対策で ES5 で書いてあるが、このページは
      RTCPeerConnection / fetch / Promise が前提なので async/await を使う。
      使えないブラウザではそもそも会話が成立しない。
@@ -167,10 +167,6 @@
   const LOG_TURNS    = 40;     // レポートに渡す発言数の上限（末尾から）
   const LOG_CHARS    = 6000;   // 同・文字数の上限。長話でも料金が跳ねないように
 
-  /* 復習の教材にする講義の件数。多いほど話題は増えるが、
-     そのぶん毎回の接続でトークンを食うのでこの辺で止める */
-  const DIGEST_MAX   = 6;
-
   /* --------------------------------------------------
      1. 担当の先生を決める
      -------------------------------------------------- */
@@ -196,12 +192,7 @@
     fatal('その先生は在籍していません', '「' + wanted + '」という先生は職員室の名簿にありません。', '職員室.html');
     return;
   }
-  /* この部屋の役目。'talk' は英会話の相手（Mac）、'review' は復習の相手。
-     interactive を優先するので、両方 true でも Mac の意味は変わらない。 */
-  const MODE = teacher.interactive === true ? 'talk'
-             : (teacher.review === true ? 'review' : null);
-
-  if (!MODE) {
+  if (teacher.interactive !== true) {
     fatal(teacher.name + '先生は対話をしていません',
           'この先生は板書での講義を担当しています。講義は正門から読めます。', 'index.html?teacher=' + encodeURIComponent(teacher.id));
     return;
@@ -212,39 +203,13 @@
   /* 先生カラーをページ全体に配る（--tf / --tfon はボタンの地色に使う） */
   S.applyTint($('talk'), teacher.color);
 
-  const REVIEW = (MODE === 'review');
-
-  /* --------------------------------------------------
-     1-b. 復習の教材 — この先生が書いた講義のダイジェスト
-     -------------------------------------------------- */
-  /* 板書の本文（board.points）は入れない。全部渡すと1回つなぐだけで
-     数万トークンになり、一言も話す前から料金が乗る。
-     「何を習ったか」を思い出させるのに要る分だけにしてある。 */
   function cut(s, n) {
     const t = String(s === null || s === undefined ? '' : s).trim().replace(/\s+/g, ' ');
     return t.length > n ? t.slice(0, n) + '…' : t;
   }
 
-  function lectureDigest(t) {
-    if (!REVIEW) return '';
-    const mine = S.search(S.views, { teacher: t.id }).slice(0, DIGEST_MAX);  // 新しい順
-    if (!mine.length) return '';
-    return mine.map(function (v, i) {
-      const rows = [(i + 1) + '. 「' + cut(v.lec.title, 60) + '」（' + (v.lec.date || '') + '）'];
-      if (v.lec.summary) rows.push('   要点: ' + cut(v.lec.summary, 140));
-      const terms = v.terms.slice(0, 8)
-        .map(function (x) { return String((x && x.term) || '').trim(); })
-        .filter(Boolean);
-      if (terms.length) rows.push('   出てきた用語: ' + terms.join('・'));
-      if (v.lec.action) rows.push('   今日の一手: ' + cut(v.lec.action, 90));
-      return rows.join('\n');
-    }).join('\n');
-  }
-
-  const DIGEST = lectureDigest(teacher);
-
   /* --------------------------------------------------
-     1-c. 画面の文言
+     1-b. 画面の文言
      -------------------------------------------------- */
   $('femoji').textContent = teacher.emoji || '🎙';
   $('fname').textContent = teacher.name;
@@ -255,29 +220,16 @@
   /* 声の球はこの先生そのもの。Mac は絵文字が 🎙 なので見た目は変わらない */
   $('orbface').textContent = teacher.emoji || '🎙';
 
-  $('startlabel').textContent = REVIEW ? (teacher.name + '先生と復習する') : (teacher.name + 'と話す');
-  /* 終了ボタンの文言は、上の課金の注記でも同じ言葉を指しているので揃える */
-  $('end').textContent = REVIEW ? '復習を終了' : '会話を終了';
-  $('endword').textContent = $('end').textContent;
-
-  $('hint').textContent = REVIEW
-    ? ('ボタンを押すとマイクの使用を聞かれます。許可したら、そのまま日本語で話しかけてください。'
-       + '言い終わると自動で返事が返ってきます（ボタンを押しっぱなしにする必要はありません）。'
-       + (DIGEST
-            ? '受講済みの講義から出題されるので、思い出しながら自分の言葉で答えてください。'
-            : teacher.name + '先生の講義はまだ1件もないので、今日は雑談から始まります。'))
-    : ('ボタンを押すとマイクの使用を聞かれます。許可したら、そのまま ' + teacher.name + ' に英語で話しかけてください。'
-       + '言い終わると自動で返事が返ってきます（ボタンを押しっぱなしにする必要はありません）。');
+  $('startlabel').textContent = teacher.name + 'と話す';
+  $('hint').textContent = 'ボタンを押すとマイクの使用を聞かれます。許可したら、そのまま ' + teacher.name + ' に英語で話しかけてください。'
+                        + '言い終わると自動で返事が返ってきます（ボタンを押しっぱなしにする必要はありません）。';
 
   doc.title = teacher.room + ' — ' + teacher.name + '｜前田学校';
 
   /* --------------------------------------------------
-     1-d. 先生の人格
+     1-c. 先生の人格
      -------------------------------------------------- */
-  /* teachers.js の tone をそのまま指示に混ぜて、名簿を直せば
-     喋り方も変わるようにしておく。ここは2種類の部屋で分かれる。 */
-
-  // 対話専任（Mac）— 英語で自由会話し、崩れたところだけ直す
+  /* teachers.js の tone をそのまま指示に混ぜて、名簿を直せば喋り方も変わるようにしておく。 */
   function talkLines(t) {
     return [
       'あなたは日本の私塾「前田学校」の' + (t.room || 'LL教室') + 'で働く英会話講師「' + t.name + '」です。フレンドリーな男性で、生徒と1対1で話しています。',
@@ -291,35 +243,8 @@
     ];
   }
 
-  // 復習部屋 — 自分が書いた講義を教材に、日本語で思い出させる
-  function reviewLines(t) {
-    const base = [
-      'あなたは日本の私塾「前田学校」の' + (t.room || '教室') + 'で「' + (t.subject || '担当教科') + '」を受け持つ教師「' + t.name + '」です。生徒と1対1で、日本語で話しています。',
-      'いまは授業の時間ではなく、放課後の復習の時間です。板書を書き直すのではなく、生徒がすでに受けた講義を一緒に思い出す係だと考えてください。',
-      '一方的に講義をしないこと。あなたが続けて喋るのは2〜3文までにして、必ず質問で返します。答えを先に言わず、生徒自身の言葉で説明させてください。',
-      '生徒の説明が合っていたら、どこが良かったのかを具体的に言ってほめ、そこから一歩踏み込んだ質問につなげます。',
-      '理解がずれていたら、頭ごなしに否定しないこと。「そこまでは合っています」と拾ってから、正しい理解を短く示し、もう一度生徒の言葉で言い直してもらいます。',
-      '生徒が詰まったらヒントを一つだけ出して待ちます。それでも出てこないときに初めて答えを言い、言い終わったら必ず「では、いまの話を自分の言葉で言うと？」と返してください。',
-      '話題が尽きたときや生徒が黙ったときは、あなたから次の論点を出します。',
-      t.tone ? '話し方の指針: ' + t.tone : ''
-    ];
-
-    if (DIGEST) {
-      base.push('--- ここから、この生徒があなたの講義で受講済みの内容（新しい順）---');
-      base.push(DIGEST);
-      base.push('--- ここまで ---');
-      base.push('復習はこの受講済みの範囲から選んで進めます。最初のひとことは、名乗ったうえで、上の一覧から2〜3件を挙げて「今日はどれを復習しますか」と選ばせる形にしてください。');
-      base.push('一覧に無い話題は、生徒のほうから振られたときだけ扱ってかまいません。一覧に無い講義を「前にやりましたね」と言わないこと。');
-    } else {
-      base.push('この生徒は、あなたの講義をまだ1件も受講していません。復習する材料が無いので、今日は雑談として進めてください。');
-      base.push('あなたの担当分野について、生徒がいま困っていること・気になっていることを質問で引き出し、興味の在りかを探ります。教科書的な説明を並べず、生徒に喋らせるほうを優先してください。');
-      base.push('最初のひとことは、名乗ってから「この分野で今いちばん気になっていることは何ですか」と尋ねる形にします。');
-    }
-    return base;
-  }
-
   function instructionsFor(t) {
-    const lines = REVIEW ? reviewLines(t) : talkLines(t);
+    const lines = talkLines(t);
     const memo = lastReportMemo();
     if (memo) {
       lines.push('--- 前回この生徒と話したときの振り返り ---');
@@ -900,13 +825,6 @@
       '会話ログに根拠が無いことは書かないでください。無理に埋めるより空にするほうが良い。',
       '生徒本人が読むメモです。日本語で、短く具体的に書いてください。'
     ];
-    if (REVIEW) {
-      return [
-        'あなたは学習コーチです。日本の私塾「前田学校」で、「' + (teacher.subject || '') + '」担当の教師「' + teacher.name + '」と生徒が交わした復習の会話ログを読み、生徒向けの振り返りメモを作ります。',
-        'fixes には、生徒の理解がずれていた点（before）、正しい理解（after）、一言の補足（note）を入れます。',
-        'good には生徒が自分の言葉できちんと説明できた点を、next には次の復習で詰めるべき論点を書きます。'
-      ].concat(common).join('\n');
-    }
     return [
       'あなたは英語学習コーチです。日本人学習者と英会話講師「' + teacher.name + '」の会話ログを読み、学習者向けの振り返りメモを作ります。',
       'fixes には、学習者が実際に言った誤り（before）、正しい言い方（after）、なぜそうなるかの一言（note）を入れます。文法・単語・言い回しのどれでもかまいません。before と after の英文は英語のまま書きます。',
@@ -1026,12 +944,58 @@
     return (d.getMonth() + 1) + '/' + two(d.getDate()) + ' ' + two(d.getHours()) + ':' + two(d.getMinutes());
   }
 
+  /* Markdownに整形してファイルとしてダウンロードさせる。
+     localStorage は端末を変える・ブラウザデータを消すと消えてしまうので、
+     手元に残しておきたいときの逃げ道として用意している。 */
+  function reportMarkdown(rep, at) {
+    const lines = ['# ' + teacher.name + '先生との会話 振り返り', '', '日時: ' + stamp(at)];
+    if (rep.summary) lines.push('', '## まとめ', '', rep.summary);
+    if (rep.fixes.length) {
+      lines.push('', '## 直しておく英語', '');
+      for (let i = 0; i < rep.fixes.length; i++) {
+        const f = rep.fixes[i];
+        let row = '- ';
+        if (f.before) row += '~~' + f.before + '~~ → ';
+        if (f.after) row += '**' + f.after + '**';
+        if (f.note) row += '（' + f.note + '）';
+        lines.push(row);
+      }
+    }
+    if (rep.good.length) {
+      lines.push('', '## よかった点', '');
+      for (let i = 0; i < rep.good.length; i++) lines.push('- ' + rep.good[i]);
+    }
+    if (rep.next.length) {
+      lines.push('', '## 次回の課題', '');
+      for (let i = 0; i < rep.next.length; i++) lines.push('- ' + rep.next[i]);
+    }
+    lines.push('', '---', REPORT_MODEL + ' が会話ログから作成');
+    return lines.join('\n');
+  }
+
+  function downloadReport(rep, at) {
+    const blob = new Blob([reportMarkdown(rep, at)], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const d = at ? new Date(at) : new Date();
+    const two = (n) => (n < 10 ? '0' + n : String(n));
+    const fname = '前田学校-' + teacher.name + '-復習-'
+      + d.getFullYear() + '-' + two(d.getMonth() + 1) + '-' + two(d.getDate())
+      + '-' + two(d.getHours()) + two(d.getMinutes()) + '.md';
+    const a = doc.createElement('a');
+    a.href = url;
+    a.download = fname;
+    doc.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  }
+
   function paintReport(rep, at) {
     const stick = nearBottom();
     const card = reviewCard();
 
     const head = el('div', 'review__head');
-    head.appendChild(el('h2', 'review__title', REVIEW ? '今日の復習の振り返り' : '今日の会話の振り返り'));
+    head.appendChild(el('h2', 'review__title', '今日の会話の振り返り'));
     head.appendChild(el('span', 'review__when mono', stamp(at)));
     card.appendChild(head);
 
@@ -1039,7 +1003,7 @@
 
     if (rep.fixes.length) {
       const sec = el('div', 'review__sec');
-      sec.appendChild(el('p', 'review__label', REVIEW ? '直しておく理解' : '直しておく英語'));
+      sec.appendChild(el('p', 'review__label', '直しておく英語'));
       for (let i = 0; i < rep.fixes.length; i++) {
         const f = rep.fixes[i];
         const row = el('div', 'review__fix');
@@ -1054,8 +1018,16 @@
     if (rep.good.length) card.appendChild(listSec('よかった点', rep.good));
     if (rep.next.length) card.appendChild(listSec('次回の課題', rep.next));
 
-    card.appendChild(el('p', 'review__foot',
+    const foot = el('div', 'review__foot');
+    foot.appendChild(el('span', null,
       REPORT_MODEL + ' が会話ログから作成 ／ この端末にだけ保存（先生ごとに直近' + REPORT_KEEP + '件）'));
+    const dl = doc.createElement('button');
+    dl.type = 'button';
+    dl.className = 'review__dl';
+    dl.textContent = '⬇ ファイルで保存';
+    dl.addEventListener('click', function () { downloadReport(rep, at); });
+    foot.appendChild(dl);
+    card.appendChild(foot);
 
     if (stick) window.scrollTo(0, doc.body.scrollHeight);
   }
@@ -1079,7 +1051,7 @@
       if (!rep.summary && !rep.fixes.length && !rep.good.length && !rep.next.length) throw new Error('empty');
       const at = new Date().toISOString();
       paintReport(rep, at);
-      saveReport(teacher.id, { at: at, mode: MODE, report: rep });
+      saveReport(teacher.id, { at: at, report: rep });
     } catch (e) {
       paintFailed();
     } finally {

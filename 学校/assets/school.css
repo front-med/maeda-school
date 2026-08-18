@@ -19,6 +19,9 @@ img { display: block; max-width: 100%; }
 button, input, select { font: inherit; color: inherit; }
 button { cursor: pointer; background: none; border: 0; }
 a { color: inherit; }
+/* hidden 属性は display:grid/flex を当てた要素にも効かせる
+   （クラス側の display に負けて出っぱなしになるのを防ぐ） */
+[hidden] { display: none !important; }
 
 /* ---------- 2. トークン（ライト） ---------- */
 :root {
@@ -766,7 +769,207 @@ body {
 .gate a { font-family: var(--mono); font-size: .74rem; letter-spacing: .1em; color: var(--ink-3); text-decoration: none; }
 .gate a:hover { color: var(--ink); }
 
-/* ---------- 15. レスポンシブ ---------- */
+/* ---------- 15. 対話（LL教室 — その場で話す先生） ----------
+   板書を持たない先生のためのページ。ここだけは「読む」画面ではなく
+   「使う」画面なので、いまどの状態か（待機／接続中／聞いている／話している）が
+   一目で分かることを最優先にしている。色は先生カラーをそのまま使い、
+   ボタンの地色だけ --tf（教室の「今日の一手」と同じ、明暗どちらでも
+   文字が 5:1 で読める地色）を借りる。
+   このセクションでしか使わないキーフレームは、追いやすいようにここに置く。 */
+
+.talk { max-width: 760px; margin: 0 auto; }
+
+.talk__head { margin-bottom: var(--s4); }
+.talk__phrase {
+  font-family: var(--mincho);
+  font-size: clamp(1.02rem, 2.6vw, 1.2rem); line-height: 1.85;
+  margin-top: var(--s4); padding-left: var(--s4);
+  border-left: 3px solid var(--t-mid, var(--line-2));
+}
+.talk__profile { font-size: .86rem; color: var(--ink-2); line-height: 1.9; margin-top: var(--s3); }
+
+/* 料金の注記 */
+.note {
+  display: flex; align-items: flex-start; gap: var(--s2);
+  margin-top: var(--s4); padding: 9px var(--s3);
+  border: 1px dashed var(--line-2); border-radius: var(--r-sm);
+  font-size: .78rem; line-height: 1.75; color: var(--ink-2);
+}
+.note__mark { flex: 0 0 auto; }
+
+/* 会話コンソール */
+.stage {
+  margin-top: var(--s5);
+  padding: clamp(22px, 4vw, 34px);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-2);
+  display: grid; justify-items: center; gap: var(--s4);
+}
+.stage__status {
+  font-family: var(--mono); font-size: .72rem; letter-spacing: .16em;
+  color: var(--ink-3); text-align: center; min-height: 1.5em;
+}
+.stage.is-listening .stage__status,
+.stage.is-speaking  .stage__status { color: var(--t-text, var(--ink-2)); }
+.stage__hint { font-size: .78rem; color: var(--ink-3); text-align: center; max-width: 34em; }
+
+/* 声の球 */
+.orb { position: relative; width: 128px; height: 128px; display: grid; place-items: center; }
+.orb__core {
+  width: 82px; height: 82px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--t-soft, var(--surface-2));
+  border: 2px solid var(--t-mid, var(--line-2));
+  transition: transform .22s ease, border-color .22s ease;
+}
+.orb__face { font-size: 32px; line-height: 1; }
+.orb__ring {
+  position: absolute; inset: 0; border-radius: 50%;
+  border: 2px solid var(--tc, var(--ink-3));
+  opacity: 0; pointer-events: none;
+}
+.orb__spin {
+  position: absolute; inset: 4px; border-radius: 50%;
+  border: 2px dashed var(--t-mid, var(--line-2));
+  opacity: 0; pointer-events: none;
+}
+
+.stage.is-connecting .orb__spin { opacity: 1; animation: orbspin 3.2s linear infinite; }
+.stage.is-listening .orb__core { transform: scale(1.04); border-color: var(--tc, var(--line-2)); }
+.stage.is-listening .orb__ring { animation: orbping 2.1s cubic-bezier(.2,.6,.3,1) infinite; }
+.stage.is-listening .orb__ring:nth-of-type(2) { animation-delay: .7s; }
+.stage.is-listening .orb__ring:nth-of-type(3) { animation-delay: 1.4s; }
+
+/* 話している間は顔を波形に差し替える */
+.wave { display: none; align-items: flex-end; gap: 3px; height: 30px; }
+.wave i {
+  display: block; width: 4px; height: 100%; border-radius: 2px;
+  background: var(--tc, var(--ink-3));
+  transform-origin: center bottom;
+  animation: orbbar .82s ease-in-out infinite;
+}
+.wave i:nth-child(2) { animation-delay: .12s; }
+.wave i:nth-child(3) { animation-delay: .26s; }
+.wave i:nth-child(4) { animation-delay: .06s; }
+.wave i:nth-child(5) { animation-delay: .19s; }
+.stage.is-speaking .orb__face { display: none; }
+.stage.is-speaking .wave { display: flex; }
+.stage.is-speaking .orb__core { border-color: var(--tc, var(--line-2)); }
+
+@keyframes orbping { from { transform: scale(.64); opacity: .5; } to { transform: scale(1); opacity: 0; } }
+@keyframes orbspin { to { transform: rotate(360deg); } }
+@keyframes orbbar  { 0%, 100% { transform: scaleY(.34); } 50% { transform: scaleY(1); } }
+@keyframes caret   { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+
+/* 操作ボタン */
+.talk__ctrl { display: flex; align-items: center; justify-content: center; gap: var(--s3); flex-wrap: wrap; }
+.talk__mic {
+  display: inline-flex; align-items: center; gap: var(--s2);
+  font-size: 1rem; font-weight: 600; letter-spacing: .04em;
+  padding: 13px 30px; border-radius: 999px;
+  background: var(--tf, var(--accent)); color: var(--tfon, #fff);
+  box-shadow: var(--shadow-1);
+  transition: opacity .16s ease, transform .16s ease;
+}
+.talk__mic:hover { transform: translateY(-1px); opacity: .93; }
+.talk__mic[disabled] { opacity: .4; cursor: default; transform: none; }
+.talk__mic em { font-style: normal; font-size: 1.1rem; }
+
+/* 会話ログ */
+.log { display: grid; gap: var(--s3); margin-top: var(--s5); }
+.log__empty {
+  font-size: .84rem; color: var(--ink-3); text-align: center;
+  padding: var(--s5) var(--s4);
+  border: 1px dashed var(--line); border-radius: var(--r-md);
+}
+.bub {
+  max-width: 86%; padding: 9px var(--s4) 11px;
+  border-radius: var(--r-lg);
+  font-size: .95rem; line-height: 1.85;
+}
+.bub__who {
+  display: block; font-family: var(--mono);
+  font-size: .6rem; letter-spacing: .16em; color: var(--ink-3); margin-bottom: 2px;
+}
+.bub--ai {
+  justify-self: start;
+  background: var(--t-soft, var(--surface-2));
+  border: 1px solid var(--t-mid, var(--line));
+  border-bottom-left-radius: var(--r-sm);
+}
+.bub--ai .bub__who { color: var(--t-text, var(--ink-3)); }
+.bub--me {
+  justify-self: end;
+  background: var(--surface); border: 1px solid var(--line);
+  border-bottom-right-radius: var(--r-sm);
+}
+.bub.is-live .bub__text::after {
+  content: "▍"; margin-left: 1px; color: var(--t-text, var(--ink-3));
+  animation: caret 1.1s steps(1) infinite;
+}
+
+/* APIキーの設定 */
+.keyform {
+  margin-top: var(--s5); padding: clamp(18px, 3vw, 24px);
+  background: var(--surface); border: 1px dashed var(--line-2);
+  border-radius: var(--r-md);
+}
+.keyform h2 {
+  font-family: var(--mincho); font-size: 1.02rem; font-weight: 600;
+  letter-spacing: .08em; margin-bottom: var(--s2);
+}
+.keyform p { font-size: .82rem; color: var(--ink-2); line-height: 1.85; }
+.keyform p + p { margin-top: var(--s2); }
+.keyform__row { display: flex; gap: var(--s2); flex-wrap: wrap; margin-top: var(--s4); }
+.keyform input {
+  flex: 1 1 260px; min-width: 0;
+  padding: 10px var(--s3);
+  background: var(--paper); border: 1px solid var(--line-2);
+  border-radius: var(--r-sm); font-family: var(--mono); font-size: .82rem;
+}
+.keyform input::placeholder { color: var(--ink-3); font-family: var(--sans); }
+.keyform input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.keyform__note { font-family: var(--mono); font-size: .68rem; color: var(--ink-3); margin-top: var(--s3); letter-spacing: .04em; }
+
+.keybar {
+  display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap;
+  margin-top: var(--s4);
+  font-family: var(--mono); font-size: .68rem; color: var(--ink-3); letter-spacing: .06em;
+}
+.keybar .gear {
+  margin-left: auto;
+  border: 1px solid var(--line-2); border-radius: 999px;
+  padding: 2px 11px; color: var(--ink-2); font-family: var(--mono); font-size: .68rem;
+}
+.keybar .gear:hover { color: var(--ink); border-color: var(--ink-3); }
+
+/* 警告・エラー */
+.alert {
+  display: flex; align-items: flex-start; gap: var(--s2);
+  margin-top: var(--s4); padding: var(--s3) var(--s4);
+  border: 1px solid #e0a3ab; border-left-width: 3px;
+  border-radius: var(--r-md);
+  background: #fdf2f3; color: #7a2733;
+  font-size: .86rem; line-height: 1.8;
+}
+.alert b { font-weight: 600; }
+.alert__mark { flex: 0 0 auto; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .alert { border-color: #5e2a31; background: #221419; color: #f3b8c0; }
+}
+:root[data-theme="dark"] .alert { border-color: #5e2a31; background: #221419; color: #f3b8c0; }
+
+@media (max-width: 700px) {
+  .orb { width: 108px; height: 108px; }
+  .orb__core { width: 70px; height: 70px; }
+  .orb__face { font-size: 27px; }
+  .bub { max-width: 94%; font-size: .9rem; }
+  .talk__mic { padding: 12px 24px; font-size: .95rem; }
+}
+
+/* ---------- 16. レスポンシブ ---------- */
 @media (max-width: 700px) {
   .lec { gap: var(--s3); padding: var(--s3); }
   .lec__thumb { flex-basis: 98px; }
@@ -784,7 +987,7 @@ body {
   .lec__dur { display: inline; }
 }
 
-/* ---------- 16. モーション ---------- */
+/* ---------- 17. モーション ---------- */
 @keyframes rise { from { opacity: 0; transform: translateY(9px); } to { opacity: 1; transform: none; } }
 @keyframes drawspine { from { transform: scaleY(0); } to { transform: scaleY(1); } }
 @keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
@@ -802,9 +1005,10 @@ body {
   }
 }
 
-/* ---------- 17. 印刷 ---------- */
+/* ---------- 18. 印刷 ---------- */
 @media print {
-  .topbar, .rail, .pager, .gate, .more { display: none !important; }
+  .topbar, .rail, .pager, .gate, .more,
+  .stage, .talk__ctrl, .keyform, .keybar { display: none !important; }
   body { background: #fff; color: #000; }
   .lecture { max-width: none; }
 }

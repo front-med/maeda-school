@@ -38,6 +38,7 @@
   <nav class="topnav">
     <a href="index.html" aria-current="page">正門</a>
     <a href="職員室.html">職員室</a>
+    <a href="対話.html?teacher=mac">LL教室</a>
     <button type="button" class="themebtn" id="themebtn">◐</button>
   </nav>
 </header>
@@ -244,6 +245,8 @@
       state.teacher = ''; update();
     }));
     for (var i = 0; i < S.teachers.length; i++) {
+      // 対話専任の先生は板書講義を持たない。絞り込みに置いても常に0件なので出さない
+      if (S.teachers[i].interactive === true) continue;
       (function (t) {
         var active = state.teacher === t.id;
         box.appendChild(rosterButton(t, counts[t.id] || 0, active, function () {

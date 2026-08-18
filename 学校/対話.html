@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>LL教室 — 前田学校</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.92em' font-size='90'%3E🏫%3C/text%3E%3C/svg%3E">
+<link rel="apple-touch-icon" href="assets/icon-180.png">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#2f4b9e">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="前田学校">
+<link rel="stylesheet" href="assets/school.css">
+<script>
+/* テーマのちらつき防止。描画前に保存済みの設定を当てる */
+(function () {
+  try {
+    var t = localStorage.getItem('maeda-school-theme');
+    if (t === 'light' || t === 'dark') {
+      document.documentElement.setAttribute('data-theme', t);
+      document.documentElement.style.colorScheme = t;
+    }
+  } catch (e) {}
+})();
+</script>
+</head>
+<body>
+<a class="skip" href="#main">本文へ移動</a>
+
+<header class="topbar">
+  <a class="brand" href="index.html">
+    <span class="brand__name">前田学校</span>
+    <span class="brand__sub mono">YOUTUBE → BOARD NOTES</span>
+  </a>
+  <nav class="topnav">
+    <a href="index.html">正門</a>
+    <a href="職員室.html">職員室</a>
+    <a href="対話.html?teacher=mac" aria-current="page">LL教室</a>
+    <button type="button" class="themebtn" id="themebtn">◐</button>
+  </nav>
+</header>
+
+<main class="page" id="main">
+  <div class="talk" id="talk">
+    <a class="crumb" href="職員室.html">← 職員室</a>
+
+    <!-- 先生の紹介 -->
+    <div class="talk__head">
+      <div class="byline">
+        <div class="byline__emoji" id="femoji">🎙</div>
+        <div>
+          <span class="byline__name" id="fname">—</span>
+          <div class="byline__sub" id="fsub"></div>
+        </div>
+      </div>
+      <p class="talk__phrase" id="fphrase" hidden></p>
+      <p class="talk__profile" id="fprofile" hidden></p>
+    </div>
+
+    <p class="note">
+      <span class="note__mark" aria-hidden="true">💸</span>
+      <span>音声での会話は <b>つないでいる時間ぶんOpenAIに課金される</b>（文字のやりとりよりかなり割高）。
+      話し終わったら「会話を終了」を押して切ること。閉じ忘れ防止に、接続中は経過時間を出しています。</span>
+    </p>
+
+    <!-- APIキーの登録（未設定のときだけ出る） -->
+    <section class="keyform" id="keyform" hidden>
+      <h2>先に OpenAI の APIキーを登録する</h2>
+      <p>会話は、この端末のブラウザから直接 OpenAI につなぎます。<b>キーはこのブラウザ（localStorage）だけに保存され</b>、前田学校のサーバーにも GitHub にも送られません。</p>
+      <p>共有パソコンでは使わないこと。心配なら、OpenAI のダッシュボードで<b>この用途専用のキーを作り、上限金額を設定して</b>おくと安全です。</p>
+      <div class="keyform__row">
+        <input type="password" id="keyinput" placeholder="sk-… で始まるAPIキーを貼り付け" autocomplete="off" spellcheck="false" aria-label="OpenAI APIキー">
+        <button type="button" class="btn btn--primary" id="keysave">保存して使う</button>
+      </div>
+      <p class="keyform__note mono">保存先 localStorage / maeda-school-openai-key</p>
+    </section>
+
+    <!-- 会話コンソール -->
+    <section class="stage is-idle" id="stage" hidden>
+      <div class="orb">
+        <span class="orb__ring" aria-hidden="true"></span>
+        <span class="orb__ring" aria-hidden="true"></span>
+        <span class="orb__ring" aria-hidden="true"></span>
+        <span class="orb__spin" aria-hidden="true"></span>
+        <span class="orb__core">
+          <span class="orb__face" id="orbface" aria-hidden="true">🎙</span>
+          <span class="wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+        </span>
+      </div>
+
+      <p class="stage__status mono" id="status" role="status">待機中</p>
+
+      <div class="talk__ctrl">
+        <button type="button" class="talk__mic" id="start">
+          <em aria-hidden="true">🎤</em><span id="startlabel">話す</span>
+        </button>
+        <button type="button" class="btn" id="end" hidden>会話を終了</button>
+      </div>
+
+      <p class="stage__hint" id="hint"></p>
+    </section>
+
+    <div class="keybar" id="keybar" hidden>
+      <span id="keystate" class="mono"></span>
+      <button type="button" class="gear" id="keyreset">⚙ APIキーを再設定</button>
+    </div>
+
+    <div id="alerts"></div>
+
+    <!-- 会話ログ -->
+    <section class="log" id="log"></section>
+  </div>
+</main>
+
+<audio id="remote" autoplay playsinline></audio>
+
+<script src="../データ/teachers.js"></script>
+<script src="../データ/lectures.js"></script>
+<script src="assets/school.js"></script>
+<script>
+/* ===========================================================
+   対話（LL教室） — 板書を持たない先生と、その場で声で話す
+   -----------------------------------------------------------
+   ・?teacher=<id> で データ/teachers.js を引く。interactive: true の
+     先生だけがこのページに入れる（今後 Mac 以外が増えても動く）。
+   ・OpenAI Realtime API に WebRTC で直接つなぐ。サーバーは立てない
+     （この学校は GitHub Pages に静的ミラーされるため）。
+     その代わり APIキーは社長のブラウザの localStorage に置く。
+   ・他ページは file:// 対策で ES5 で書いてあるが、このページは
+     RTCPeerConnection / fetch / Promise が前提なので async/await を使う。
+     使えないブラウザではそもそも会話が成立しない。
+   =========================================================== */
+(function () {
+  'use strict';
+
+  const S = window.School, el = S.el, doc = document;
+  const $ = (id) => doc.getElementById(id);
+
+  S.mountTheme($('themebtn'));
+
+  /* --------------------------------------------------
+     0. 設定
+     -------------------------------------------------- */
+  const MODEL       = 'gpt-realtime-2.1';
+  const CALLS_URL   = 'https://api.openai.com/v1/realtime/calls';
+  const SECRET_URL  = 'https://api.openai.com/v1/realtime/client_secrets';
+  const TRANSCRIBE  = 'gpt-4o-mini-transcribe';   // 生徒の発話を文字に起こすモデル
+  const KEY_STORE   = 'maeda-school-openai-key';
+
+  /* --------------------------------------------------
+     1. 担当の先生を決める
+     -------------------------------------------------- */
+  const wanted = S.qs('teacher') || 'mac';
+  const teacher = S.teacherById(wanted);
+
+  function fatal(title, body, link) {
+    const box = el('div', 'blank');
+    box.appendChild(el('div', 'blank__mark', '🚪'));
+    box.appendChild(el('h2', null, title));
+    box.appendChild(el('p', null, body));
+    const go = doc.createElement('a');
+    go.className = 'btn';
+    go.href = link || '職員室.html';
+    go.textContent = '職員室へ →';
+    box.appendChild(go);
+    const talk = $('talk');
+    talk.textContent = '';
+    talk.appendChild(box);
+  }
+
+  if (teacher.id !== wanted) {
+    fatal('その先生は在籍していません', '「' + wanted + '」という先生は職員室の名簿にありません。', '職員室.html');
+    return;
+  }
+  if (teacher.interactive !== true) {
+    fatal(teacher.name + '先生は対話をしていません',
+          'この先生は板書での講義を担当しています。講義は正門から読めます。', 'index.html?teacher=' + encodeURIComponent(teacher.id));
+    return;
+  }
+
+  const VOICE = teacher.voice || 'cedar';
+
+  /* 先生カラーをページ全体に配る（--tf / --tfon はボタンの地色に使う） */
+  S.applyTint($('talk'), teacher.color);
+
+  $('femoji').textContent = teacher.emoji || '🎙';
+  $('fname').textContent = teacher.name;
+  $('fsub').textContent = (teacher.subject || '') + ' / ' + (teacher.room || '');
+  if (teacher.catchphrase) { $('fphrase').textContent = teacher.catchphrase; $('fphrase').hidden = false; }
+  if (teacher.profile)     { $('fprofile').textContent = teacher.profile;    $('fprofile').hidden = false; }
+  $('startlabel').textContent = teacher.name + 'と話す';
+  $('hint').textContent = 'ボタンを押すとマイクの使用を聞かれます。許可したら、そのまま ' + teacher.name + ' に英語で話しかけてください。'
+                        + '言い終わると自動で返事が返ってきます（ボタンを押しっぱなしにする必要はありません）。';
+  doc.title = teacher.room + ' — ' + teacher.name + '｜前田学校';
+
+  /* 先生の人格。teachers.js の tone をそのまま指示に混ぜて、
+     名簿を直せば喋り方も変わるようにしておく。 */
+  function instructionsFor(t) {
+    return [
+      'あなたは日本の私塾「前田学校」の' + (t.room || 'LL教室') + 'で働く英会話講師「' + t.name + '」です。フレンドリーな男性で、生徒と1対1で話しています。',
+      '会話は英語で進めます。生徒が固まったとき、または意味が伝わっていないと感じたときだけ、短い日本語を挟んでかまいません。',
+      '講義はしません。本物の日常会話と同じテンポで、相づちと短い質問を混ぜてキャッチボールを続けてください。一度に喋るのは2〜3文までにします。',
+      '生徒の英語に文法・単語・言い回しの間違いがあれば、会話を止めすぎない範囲でその都度やさしく指摘し、正しい言い方を一度だけ示してから、何事もなかったように話を続けてください。通じている表現をわざわざ言い換えさせたり、細かすぎる指摘を重ねたりはしません。',
+      '間違いがなければ一言ほめて、次の質問につなげます。',
+      '生徒が黙っているときは、こちらから話題を振ってください。',
+      '最初のひとことは、名乗ってから軽い雑談の質問をひとつ投げる形にします。',
+      t.tone ? '話し方の指針: ' + t.tone : ''
+    ].filter(Boolean).join('\n');
+  }
+
+  /* --------------------------------------------------
+     2. APIキー（このブラウザだけに置く）
+     -------------------------------------------------- */
+  function readKey() {
+    try { return localStorage.getItem(KEY_STORE) || ''; } catch (e) { return ''; }
+  }
+  function writeKey(v) {
+    try { v ? localStorage.setItem(KEY_STORE, v) : localStorage.removeItem(KEY_STORE); return true; }
+    catch (e) { return false; }
+  }
+
+  function paintKeyState() {
+    const key = readKey();
+    $('keyform').hidden = !!key;
+    $('stage').hidden = !key;
+    $('keybar').hidden = !key;
+    if (key) {
+      $('keystate').textContent = 'APIキー登録済み  ' + key.slice(0, 6) + '…' + key.slice(-4);
+    }
+  }
+
+  $('keysave').addEventListener('click', function () {
+    const v = $('keyinput').value.trim();
+    clearAlerts();
+    if (!v) { warn('APIキーが空です', '<code>sk-</code> で始まるキーを貼り付けてください。'); return; }
+    if (v.indexOf('sk-') !== 0) {
+      warn('キーの形が違うようです', 'OpenAI のAPIキーは <code>sk-</code> から始まります。貼り付けたものをもう一度確認してください。');
+      return;
+    }
+    if (!writeKey(v)) {
+      warn('保存できませんでした', 'ブラウザのプライベートモードなどで localStorage が使えない可能性があります。');
+      return;
+    }
+    $('keyinput').value = '';
+    paintKeyState();
+  });
+  $('keyinput').addEventListener('keydown', function (e) { if (e.key === 'Enter') $('keysave').click(); });
+
+  $('keyreset').addEventListener('click', function () {
+    hangup();
+    writeKey('');
+    clearAlerts();
+    paintKeyState();
+    $('keyinput').focus();
+  });
+
+  /* --------------------------------------------------
+     3. 画面のお知らせ
+     -------------------------------------------------- */
+  function clearAlerts() { $('alerts').textContent = ''; }
+
+  /* body は <code> だけ許した簡単な整形。外から来た文字列は入れない */
+  function warn(title, bodyHtml) {
+    const box = el('div', 'alert');
+    box.appendChild(el('span', 'alert__mark', '⚠'));
+    const txt = doc.createElement('span');
+    const b = doc.createElement('b');
+    b.textContent = title;
+    txt.appendChild(b);
+    txt.appendChild(doc.createElement('br'));
+    const rest = doc.createElement('span');
+    rest.innerHTML = String(bodyHtml || '').replace(/<(?!\/?code>)/g, '&lt;');
+    txt.appendChild(rest);
+    box.appendChild(txt);
+    $('alerts').appendChild(box);
+    return box;
+  }
+
+  /* 外部（APIのエラーメッセージなど）から来た文字列はこちらで出す */
+  function warnText(title, text) {
+    const box = el('div', 'alert');
+    box.appendChild(el('span', 'alert__mark', '⚠'));
+    const txt = doc.createElement('span');
+    txt.appendChild(el('b', null, title));
+    txt.appendChild(doc.createElement('br'));
+    txt.appendChild(doc.createTextNode(String(text || '')));
+    box.appendChild(txt);
+    $('alerts').appendChild(box);
+    return box;
+  }
+
+  /* --------------------------------------------------
+     4. 会話ログ（吹き出し）
+     -------------------------------------------------- */
+  const log = $('log');
+  const bubbles = Object.create(null);   // item_id -> {box, text}
+  let logEmpty = null;
+
+  function showEmpty() {
+    if (logEmpty) return;
+    logEmpty = el('p', 'log__empty', 'ここに会話の書き起こしが残ります。');
+    log.appendChild(logEmpty);
+  }
+  function hideEmpty() {
+    if (logEmpty && logEmpty.parentNode) logEmpty.parentNode.removeChild(logEmpty);
+    logEmpty = null;
+  }
+  showEmpty();
+
+  function nearBottom() {
+    return (window.innerHeight + window.scrollY) > (doc.body.scrollHeight - 220);
+  }
+
+  function bubbleFor(key, who) {
+    if (bubbles[key]) return bubbles[key];
+    hideEmpty();
+    const stick = nearBottom();
+    const box = el('div', 'bub bub--' + (who === 'me' ? 'me' : 'ai') + ' is-live');
+    box.appendChild(el('span', 'bub__who', who === 'me' ? 'YOU' : teacher.name.toUpperCase()));
+    const text = el('span', 'bub__text');
+    box.appendChild(text);
+    log.appendChild(box);
+    const rec = { box: box, text: text };
+    bubbles[key] = rec;
+    if (stick) window.scrollTo(0, doc.body.scrollHeight);
+    return rec;
+  }
+
+  function appendDelta(key, who, delta) {
+    if (!delta) return;
+    const rec = bubbleFor(key, who);
+    rec.text.textContent += delta;
+  }
+
+  function finishBubble(key, who, finalText) {
+    // 一文字も届かないまま終わった発話で、空の吹き出しを作らない
+    if (!bubbles[key] && !finalText) return;
+    const rec = bubbleFor(key, who);
+    if (finalText) rec.text.textContent = finalText;
+    rec.box.classList.remove('is-live');
+    if (!rec.text.textContent) dropBubble(key);
+  }
+
+  function dropBubble(key) {
+    const rec = bubbles[key];
+    if (rec && rec.box.parentNode) rec.box.parentNode.removeChild(rec.box);
+    delete bubbles[key];
+    if (!log.children.length) showEmpty();
+  }
+
+  /* --------------------------------------------------
+     5. 状態表示
+     -------------------------------------------------- */
+  const stage = $('stage');
+  const LABEL = {
+    idle:       '待機中',
+    connecting: 'つないでいます…',
+    listening:  '聞いています',
+    speaking:   teacher.name + 'が話しています',
+    error:      '切断されました'
+  };
+  let mode = 'idle';
+  let startedAt = 0, tick = null;
+
+  function paintStatus() {
+    let s = LABEL[mode] || '';
+    if (startedAt) s += '  ' + S.mmss((Date.now() - startedAt) / 1000);
+    $('status').textContent = s;
+  }
+
+  function setMode(next) {
+    mode = next;
+    stage.className = 'stage is-' + next;
+    paintStatus();
+  }
+
+  function startClock() {
+    startedAt = Date.now();
+    paintStatus();
+    tick = setInterval(paintStatus, 1000);
+  }
+  function stopClock() {
+    if (tick) clearInterval(tick);
+    tick = null; startedAt = 0;
+  }
+
+  /* --------------------------------------------------
+     6. 接続
+     -------------------------------------------------- */
+  let pc = null, dc = null, mic = null, connected = false;
+  const audio = $('remote');
+
+  /* セッションの中身。ephemeral token の発行・SDP交換・session.update の
+     3か所で同じものを使うので、ここ1か所だけ直せば全部変わる。 */
+  function sessionConfig() {
+    return {
+      type: 'realtime',
+      model: MODEL,
+      output_modalities: ['audio'],
+      instructions: instructionsFor(teacher),
+      audio: {
+        input: {
+          /* 生徒の発話を文字に起こす。language は指定しない
+             （英語の中に日本語が混ざっても拾えるようにするため） */
+          transcription: { model: TRANSCRIBE },
+          /* 言い終わりを意味で判断して、自動で返事を始める。
+             これがあるからボタンを押しっぱなしにしなくてよい */
+          turn_detection: { type: 'semantic_vad', interrupt_response: true }
+        },
+        output: { voice: VOICE }
+      }
+    };
+  }
+
+  /* ephemeral token（使い捨ての鍵）を取りにいく。このページは GitHub Pages で
+     公開される＝誰でも開けるので、生の長期キー（sk-…）は通信に一切乗せたくない。
+     使い捨ての鍵が発行できなかったときは、フルキーへ落とさず接続そのものを諦める。 */
+  async function getToken(key) {
+    let r;
+    try {
+      r = await fetch(SECRET_URL, {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session: sessionConfig() })
+      });
+    } catch (e) {
+      return { token: null, status: 'network' };
+    }
+    if (r.status === 401) return { token: null, status: 401 };
+    if (r.ok) {
+      const j = await r.json();
+      // 公式は data.value。念のため旧形式も見る
+      const v = j.value || (j.client_secret && j.client_secret.value);
+      if (typeof v === 'string' && v) return { token: v };
+    }
+    return { token: null, status: r.status };
+  }
+
+  /* SDPの交換。使い捨ての鍵（ephemeral token）だけを使う。生のSDPをそのまま
+     送ればよい（セッションの設定は鍵に焼き込み済み）。 */
+  function exchangeSdp(sdp, token) {
+    return fetch(CALLS_URL, {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/sdp' },
+      body: sdp
+    });
+  }
+
+  function send(obj) {
+    if (dc && dc.readyState === 'open') dc.send(JSON.stringify(obj));
+  }
+
+  /* OpenAI が返すエラー本文は JSON。読めるなら message だけ取り出す */
+  function apiMessage(body) {
+    try {
+      const j = JSON.parse(body);
+      const m = j && j.error && (j.error.message || j.error.code);
+      if (m) return String(m);
+    } catch (e) {}
+    const s = String(body || '').trim();
+    return s.length > 400 ? s.slice(0, 400) + '…' : s;
+  }
+
+  async function connect() {
+    clearAlerts();
+
+    const key = readKey();
+    if (!key) { paintKeyState(); return; }
+
+    if (!window.RTCPeerConnection) {
+      warn('このブラウザでは会話できません', 'WebRTC に対応したブラウザ（Safari・Chrome の最新版など）で開いてください。');
+      return;
+    }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      warn('マイクを使えません',
+        location.protocol === 'file:'
+          ? 'ファイルを直接開いた状態（<code>file://</code>）だと、ブラウザがマイクを許可しないことがあります。iPhone用の公開URL（https）から開くか、<code>ツール/公開.sh</code> で公開したページを使ってください。'
+          : 'このブラウザ・この開き方ではマイクにアクセスできません。https のページから開いてください。');
+      return;
+    }
+
+    $('start').disabled = true;
+    setMode('connecting');
+
+    try {
+      /* マイクを先に取る。ここで断られたら以降は無駄なので中断する */
+      mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (e) {
+      hangup('idle');
+      const name = e && e.name;
+      if (name === 'NotAllowedError' || name === 'SecurityError') {
+        warn('マイクの使用が許可されませんでした',
+             'ブラウザのアドレスバーの鍵アイコンからマイクを「許可」に変えて、もう一度お試しください。');
+      } else if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+        warnText('マイクが見つかりません', 'この端末に使えるマイクがありません。イヤホンマイクなどを接続してから、もう一度お試しください。');
+      } else {
+        warnText('マイクを開けませんでした', (e && e.message) || String(e));
+      }
+      return;
+    }
+
+    let token;
+    try {
+      const got = await getToken(key);
+      if (got.status === 401) {
+        hangup('idle');
+        warn('APIキーが拒否されました（401）', 'キーが間違っているか、無効化されています。<code>⚙ APIキーを再設定</code> から入れ直してください。');
+        return;
+      }
+      if (!got.token) {
+        hangup('idle');
+        warn('安全に接続できませんでした',
+             '使い捨ての接続キーが発行できませんでした（' + (got.status === 'network' ? '通信エラー' : 'HTTP ' + got.status) + '）。'
+             + '長期のAPIキーをそのまま送らない設計にしているため、この場合は接続していません。少し時間を置いてもう一度お試しください。');
+        return;
+      }
+      token = got.token;
+    } catch (e) {
+      hangup('idle');
+      warnText('安全に接続できませんでした', (e && e.message) || String(e));
+      return;
+    }
+
+    try {
+      pc = new RTCPeerConnection();
+
+      /* 先生の声 */
+      pc.ontrack = function (e) {
+        audio.srcObject = e.streams[0];
+        const p = audio.play();
+        if (p && p.catch) p.catch(function () {
+          warn('音声の再生がブラウザに止められました', '画面のどこかを一度タップ／クリックすると音が出ます。');
+        });
+      };
+
+      pc.onconnectionstatechange = function () {
+        if (!pc) return;
+        if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+          if (connected) {
+            warnText('接続が切れました', '回線が不安定か、セッションが終了しました。もう一度「' + teacher.name + 'と話す」を押してください。');
+            hangup('error');
+          }
+        }
+      };
+
+      /* マイクを送る */
+      mic.getTracks().forEach(function (tr) { pc.addTrack(tr, mic); });
+
+      /* イベント用のデータチャネル */
+      dc = pc.createDataChannel('oai-events');
+      dc.onopen = function () {
+        send({ type: 'session.update', session: sessionConfig() });
+        /* こちらから話しかけてもらう（挨拶の一言） */
+        send({ type: 'response.create' });
+        connected = true;
+        setMode('listening');
+        $('end').hidden = false;
+        $('start').hidden = true;
+        startClock();
+      };
+      dc.onmessage = function (e) { handleEvent(e.data); };
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      const res = await exchangeSdp(offer.sdp, token);
+
+      if (!res.ok) {
+        const body = await res.text().catch(function () { return ''; });
+        hangup('idle');
+        if (res.status === 401) {
+          warn('APIキーが拒否されました（401）', 'キーが間違っているか、無効化されています。<code>⚙ APIキーを再設定</code> から入れ直してください。');
+        } else if (res.status === 429) {
+          warn('使いすぎか、残高切れです（429）', 'OpenAI 側のレート上限に達したか、クレジット残高が足りません。少し待つか、残高を確認してください。');
+        } else if (res.status === 403) {
+          warn('このキーでは Realtime API を使えません（403）', 'OpenAI のプロジェクト設定で、このキーに Realtime の権限があるか確認してください。');
+        } else {
+          warnText('つなげませんでした（HTTP ' + res.status + '）', apiMessage(body) || 'OpenAI からの応答を読めませんでした。');
+        }
+        return;
+      }
+
+      const answer = await res.text();
+      await pc.setRemoteDescription({ type: 'answer', sdp: answer });
+
+    } catch (e) {
+      hangup('idle');
+      if (e && (e.name === 'TypeError' || String(e).indexOf('Failed to fetch') >= 0)) {
+        warn('OpenAI に接続できませんでした',
+             'ネットワークが切れているか、ブラウザ側で通信がブロックされています（<code>file://</code> で開いているとブロックされることがあります）。'
+             + 'iPhone用の公開URL（https）から開くと通ることがあります。');
+      } else {
+        warnText('接続に失敗しました', (e && e.message) || String(e));
+      }
+    }
+  }
+
+  /* --------------------------------------------------
+     7. イベントの受け取り
+     -------------------------------------------------- */
+  function handleEvent(raw) {
+    let ev;
+    try { ev = JSON.parse(raw); } catch (e) { return; }
+    const type = String(ev.type || '');
+
+    /* --- エラー --- */
+    if (type === 'error') {
+      const detail = (ev.error && (ev.error.message || ev.error.code)) || '詳細不明';
+      warnText('OpenAI からエラーが返りました', detail);
+      return;
+    }
+
+    /* --- 生徒の発話の書き起こし ---
+       GA と beta で名前が違いうるので、末尾で見分ける */
+    if (type.indexOf('input_audio_transcription') >= 0) {
+      const key = 'me:' + (ev.item_id || 'x');
+      if (/\.delta$/.test(type)) { appendDelta(key, 'me', ev.delta); return; }
+      if (/\.completed$/.test(type) || /\.done$/.test(type)) {
+        finishBubble(key, 'me', ev.transcript);
+        return;
+      }
+      if (/\.failed$/.test(type)) { dropBubble(key); return; }
+      return;
+    }
+
+    /* --- 先生の返事の書き起こし ---
+       response.output_audio_transcript.* / response.audio_transcript.* の両方を拾う */
+    if (/audio_transcript\.(delta|done)$/.test(type)) {
+      const key = 'ai:' + (ev.item_id || ev.response_id || 'x');
+      if (/\.delta$/.test(type)) {
+        if (mode !== 'speaking') setMode('speaking');
+        appendDelta(key, 'ai', ev.delta);
+      } else {
+        finishBubble(key, 'ai', ev.transcript);
+      }
+      return;
+    }
+
+    /* --- 喋っている・聞いている の切り替え --- */
+    switch (type) {
+      case 'input_audio_buffer.speech_started':
+        if (connected && mode !== 'speaking') setMode('listening');
+        break;
+      case 'output_audio_buffer.started':
+        if (connected) setMode('speaking');
+        break;
+      case 'output_audio_buffer.stopped':
+      case 'output_audio_buffer.cleared':
+      case 'response.done':
+        if (connected) setMode('listening');
+        break;
+    }
+  }
+
+  /* --------------------------------------------------
+     8. 切断
+     -------------------------------------------------- */
+  function stopAll() {
+    if (dc) { try { dc.close(); } catch (e) {} dc = null; }
+    if (pc) { try { pc.close(); } catch (e) {} pc = null; }
+    if (mic) { mic.getTracks().forEach(function (tr) { try { tr.stop(); } catch (e) {} }); mic = null; }
+    if (audio) { audio.srcObject = null; }
+    connected = false;
+    stopClock();
+  }
+
+  /* 片付けはここ1本。マイクを必ず止める＝課金を止める、が最重要。 */
+  function hangup(next) {
+    stopAll();
+    setMode(next || 'idle');
+    $('start').hidden = false;
+    $('start').disabled = false;
+    $('end').hidden = true;
+    /* 途中で切れた吹き出しのカーソルを止める */
+    for (const k in bubbles) if (Object.prototype.hasOwnProperty.call(bubbles, k)) {
+      bubbles[k].box.classList.remove('is-live');
+    }
+  }
+
+  $('start').addEventListener('click', connect);
+  $('end').addEventListener('click', function () { clearAlerts(); hangup('idle'); });
+
+  /* 閉じ忘れ・移動でつなぎっぱなしにしない（課金が続くため） */
+  window.addEventListener('pagehide', function () { stopAll(); });
+  window.addEventListener('beforeunload', function () { stopAll(); });
+
+  /* --------------------------------------------------
+     9. 起動
+     -------------------------------------------------- */
+  paintKeyState();
+  setMode('idle');
+  if (!readKey()) $('keyinput').focus();
+})();
+</script>
+</body>
+</html>

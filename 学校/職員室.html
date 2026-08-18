@@ -37,6 +37,7 @@
   <nav class="topnav">
     <a href="index.html">正門</a>
     <a href="職員室.html" aria-current="page">職員室</a>
+    <a href="対話.html?teacher=mac">LL教室</a>
     <button type="button" class="themebtn" id="themebtn">◐</button>
   </nav>
 </header>
@@ -96,8 +97,14 @@
   })();
 
   /* ---------- 先生カード ---------- */
+  /* interactive の先生（対話専任）は板書講義を持たないので、
+     講義一覧ではなく対話ページへ送る。件数も出さない。 */
   function card(t) {
     var n = counts[t.id] || 0;
+    var live = t.interactive === true;
+    var home = live
+      ? '対話.html?teacher=' + encodeURIComponent(t.id)
+      : 'index.html?teacher=' + encodeURIComponent(t.id);
 
     var art = doc.createElement('article');
     art.className = 'tcard';
@@ -113,7 +120,7 @@
     var idbox = doc.createElement('div');
     var name = el('div', 'tcard__name');
     var link = doc.createElement('a');
-    link.href = 'index.html?teacher=' + encodeURIComponent(t.id);
+    link.href = home;
     link.textContent = t.name;
     name.appendChild(link);
     if (t.founding === false) name.appendChild(el('span', 'badge-new', '新任'));
@@ -123,10 +130,16 @@
 
     var cnt = doc.createElement('a');
     cnt.className = 'tcard__count';
-    cnt.href = 'index.html?teacher=' + encodeURIComponent(t.id);
-    cnt.setAttribute('aria-label', t.name + 'の講義 ' + n + '件を見る');
-    cnt.appendChild(el('b', null, String(n)));
-    cnt.appendChild(el('span', null, '講義'));
+    cnt.href = home;
+    if (live) {
+      cnt.setAttribute('aria-label', t.name + 'と話す');
+      cnt.appendChild(el('b', null, '●'));
+      cnt.appendChild(el('span', null, '対話'));
+    } else {
+      cnt.setAttribute('aria-label', t.name + 'の講義 ' + n + '件を見る');
+      cnt.appendChild(el('b', null, String(n)));
+      cnt.appendChild(el('span', null, '講義'));
+    }
     head.appendChild(cnt);
     box.appendChild(head);
 
@@ -162,10 +175,16 @@
     var foot = el('div', 'tcard__foot');
     foot.appendChild(el('span', null, '着任 ' + (t.joined || '—')));
     foot.appendChild(el('span', null, t.founding === false ? '新任採用' : '開校時から'));
-    if (n) {
+    if (live) {
+      var talk = doc.createElement('a');
+      talk.className = 'tcard__go';
+      talk.href = home;
+      talk.textContent = t.name + 'と話す →';
+      foot.appendChild(talk);
+    } else if (n) {
       var go = doc.createElement('a');
       go.className = 'tcard__go';
-      go.href = 'index.html?teacher=' + encodeURIComponent(t.id);
+      go.href = home;
       go.textContent = '講義を見る →';
       foot.appendChild(go);
     } else {
